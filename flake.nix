@@ -34,8 +34,7 @@
               # gnutls-bin
               gnugrep
 
-              boost
-              # libboost-all-dev
+              boost # libboost-all-dev
               # libedit-dev
               # libmaven-shade-plugin-java
               # libncurses5-dev
@@ -56,7 +55,7 @@
             ];
 
             CAPSTAN_QEMU_PATH = "${pkgs.qemu}/bin/qemu-system-x86_64";
-            BOOST_PATH = "${pkgs.boost}";
+            boost_base = "${pkgs.boost}/lib";
 
             shellHook = ''
             '';

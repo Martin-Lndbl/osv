@@ -17,29 +17,21 @@
         in
         {
           devShell = pkgs.mkShell {
-
             buildInputs = with pkgs; [
               ant
               autoconf
               automake
               binutils
               bison
-              # build-essentials
               curl
               flex
               gawk
               gdb
               genromfs
               git
-              # gnutls-bin
               gnugrep
-
-              boost # libboost-all-dev
-              # libedit-dev
-              # libmaven-shade-plugin-java
-              # libncurses5-dev
+              boost
               libtool
-              # libyaml-cpp-dev
               cmake
               jdk8
               maven
@@ -54,10 +46,31 @@
               wget
             ];
 
+
+            LD_LIBRARY_PATH = "${pkgs.readline}/lib";
+            LUA_LIB_PATH = "${pkgs.lua53Packages.lua}/lib";
+            GOMP_DIR = pkgs.libgcc.lib;
+
             CAPSTAN_QEMU_PATH = "${pkgs.qemu}/bin/qemu-system-x86_64";
-            boost_base = "${pkgs.boost}/lib";
 
             shellHook = ''
+              /bin/bash --version >/dev/null 2>&1 || {
+                echo >&2 "Error: /bin/bash is required but was not found.  Aborting."
+                echo >&2 "If you're using NixOs, consider using https://github.com/Mic92/envfs."
+                exit 1
+                }
+
+              mkdir $TMP/openssl-all
+              ln -rsf ${pkgs.openssl}/* $TMP/openssl-all
+              ln -rsf ${pkgs.openssl.dev}/* $TMP/openssl-all
+              ln -rsf ${pkgs.openssl.out}/* $TMP/openssl-all
+              export OPENSSL_DIR="$TMP/openssl-all";
+              export OPENSSL_LIB_PATH="$TMP/openssl-all/lib";
+
+              mkdir $TMP/libboost
+              ln -s ${pkgs.boost}/lib/* $TMP/libboost/
+              for file in $TMP/libboost/*-x64*; do mv "$file" "''${file//-x64/}"; done
+              export boost_base="$TMP/libboost"
             '';
           };
         }

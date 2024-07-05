@@ -30,7 +30,7 @@
               genromfs
               git
               gnugrep
-              boost
+              osv-boost
               libtool
               cmake
               jdk8
@@ -68,7 +68,7 @@
               export OPENSSL_LIB_PATH="$TMP/openssl-all/lib";
 
               mkdir $TMP/libboost
-              ln -s ${pkgs.boost}/lib/* $TMP/libboost/
+              ln -s ${pkgs.osv-boost}/lib/* $TMP/libboost/
               for file in $TMP/libboost/*-x64*; do mv "$file" "''${file//-x64/}"; done
               export boost_base="$TMP/libboost"
             '';

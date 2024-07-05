@@ -44,6 +44,8 @@
               tcpdump
               unzip
               wget
+              # glibc.static
+              gcc14
             ];
 
 

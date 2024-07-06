@@ -19,39 +19,40 @@
           devShell = pkgs.mkShell {
 
             nativeBuildInputs = with pkgs; [
-              ack                 # grep tool
-              ant                 # java dev lib
+              ack # grep tool
+              ant # java dev lib
               autoconf
               automake
               bash
               binutils
               bisoncpp
-              gdb                 # gnu debugger
+              gdb # gnu debugger
               gnumake
               gnupatch
-              flamegraph          # code hierarchy visualization
+              flamegraph # code hierarchy visualization
               libedit
-              libgcc              # Compiler
+              libgcc # Compiler
               libtool
               libvirt
               lua53Packages.lua
               ncurses
-              pax-utils           # elf security library
+              pax-utils # elf security library
               python3
               python312Packages.requests
-              p11-kit             # PKCS#11 loader
-              qemu_full           # hypervisor
-              readline            # interactive line editing
+              p11-kit # PKCS#11 loader
+              qemu_full # hypervisor
+              readline # interactive line editing
               unzip
-              zulu8               # Java jdk
+              zulu8 # Java jdk
+
             ];
 
             buildInputs = with pkgs; [
-              osv-boost           # C++ libraries
-              readline            # interactive line editing
-              libaio              # I/O library
-              openssl             # SSL/TLS library
-              clang-tools_18      # language server
+              osv-boost # C++ libraries
+              readline # interactive line editing
+              libaio # I/O library
+              openssl # SSL/TLS library
+              clang-tools_18 # language server
             ];
 
             LD_LIBRARY_PATH = "${pkgs.readline}/lib";

@@ -17,35 +17,42 @@
         in
         {
           devShell = pkgs.mkShell {
-            buildInputs = with pkgs; [
-              ant
+
+            nativeBuildInputs = with pkgs; [
+              ack                 # grep tool
+              ant                 # java dev lib
               autoconf
               automake
+              bash
               binutils
-              bison
-              curl
-              flex
-              gawk
-              gdb
-              genromfs
-              git
-              gnugrep
-              boost
+              bisoncpp
+              gdb                 # gnu debugger
+              gnumake
+              gnupatch
+              flamegraph          # code hierarchy visualization
+              libedit
+              libgcc              # Compiler
               libtool
-              cmake
-              jdk8
-              maven
-              openssl
-              p11-kit
-              python312Packages.dpkt
+              libvirt
+              lua53Packages.lua
+              ncurses
+              pax-utils           # elf security library
+              python3
               python312Packages.requests
-              qemu
-              qemu-utils
-              tcpdump
+              p11-kit             # PKCS#11 loader
+              qemu_full           # hypervisor
+              readline            # interactive line editing
               unzip
-              wget
+              zulu8               # Java jdk
             ];
 
+            buildInputs = with pkgs; [
+              osv-boost           # C++ libraries
+              readline            # interactive line editing
+              libaio              # I/O library
+              openssl             # SSL/TLS library
+              clang-tools_18      # language server
+            ];
 
             LD_LIBRARY_PATH = "${pkgs.readline}/lib";
             LUA_LIB_PATH = "${pkgs.lua53Packages.lua}/lib";
@@ -56,7 +63,7 @@
             shellHook = ''
               /bin/bash --version >/dev/null 2>&1 || {
                 echo >&2 "Error: /bin/bash is required but was not found.  Aborting."
-                echo >&2 "If you're using NixOs, consider using https://github.com/Mic92/envfs."
+                echo >&2 "If you're on NixOs, consider using https://github.com/Mic92/envfs."
                 exit 1
                 }
 
@@ -68,7 +75,7 @@
               export OPENSSL_LIB_PATH="$TMP/openssl-all/lib";
 
               mkdir $TMP/libboost
-              ln -s ${pkgs.boost}/lib/* $TMP/libboost/
+              ln -s ${pkgs.osv-boost}/lib/* $TMP/libboost/
               for file in $TMP/libboost/*-x64*; do mv "$file" "''${file//-x64/}"; done
               export boost_base="$TMP/libboost"
             '';

@@ -68,6 +68,9 @@
                 exit 1
                 }
 
+              export OSV_BASE=$(git rev-parse --show-toplevel)
+              export OSV_BUILD_PATH=$OSV_BASE/build/release.x64
+
               mkdir $TMP/openssl-all
               ln -rsf ${pkgs.openssl}/* $TMP/openssl-all
               ln -rsf ${pkgs.openssl.dev}/* $TMP/openssl-all
@@ -76,9 +79,9 @@
               export OPENSSL_LIB_PATH="$TMP/openssl-all/lib";
 
               mkdir $TMP/libboost
+              export boost_base="$TMP/libboost"
               ln -s ${pkgs.osv-boost}/lib/* $TMP/libboost/
               for file in $TMP/libboost/*-x64*; do mv "$file" "''${file//-x64/}"; done
-              export boost_base="$TMP/libboost"
             '';
           };
         }

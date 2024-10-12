@@ -18,6 +18,8 @@
         {
           devShell = pkgs.mkShell {
 
+            # Don't add glib.static here - As there is an issue with wcslen defined twice.
+            # If you want to use statically linked executables, build them manually before calling ./scripts/build
             nativeBuildInputs = with pkgs; [
               ack # grep tool
               ant # java dev lib

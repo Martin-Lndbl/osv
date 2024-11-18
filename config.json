@@ -6,7 +6,8 @@
         },
     "repositories": [
         "${OSV_BASE}/apps",
-        "${OSV_BASE}/modules"
+        "${OSV_BASE}/modules",
+        "${OSV_BASE}/benchmarks"
     ]
    },
    "default": [ "cloud-init", "httpserver" ]

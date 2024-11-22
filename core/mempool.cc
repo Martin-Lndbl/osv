@@ -1626,6 +1626,19 @@ static void early_free_page(void* v)
     auto pr = new (v) page_range(page_size);
     free_page_range(pr);
 }
+
+void *physically_alloc_page() {
+  WITH_LOCK(free_page_ranges_lock) {
+    on_alloc(page_size);
+    return static_cast<void *>(free_page_ranges.alloc(page_size));
+  }
+}
+
+void physically_free_page(void *v) {
+  auto pr = new (v) page_range(page_size);
+  free_page_range(pr);
+}
+
 //
 // Following variables and functions are used to implement simple
 // early (pre-SMP) memory allocation scheme.

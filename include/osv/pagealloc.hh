@@ -17,6 +17,9 @@ void free_page(void* page);
 void* alloc_huge_page(size_t bytes);
 void free_huge_page(void *page, size_t bytes);
 
+void *physically_alloc_page();
+void physically_free_page(void *page);
+
 }
 
 #endif /* PAGEALLOC_HH_ */

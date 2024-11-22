@@ -619,7 +619,7 @@ if __name__ == "__main__":
                         help="disable vnc")
     parser.add_argument("--nogdb", action="store_true",
                         help="disable gdb")
-    parser.add_argument("--gdb", action="store", default="1234",
+    parser.add_argument("--gdb", action="store", default="2234",
                         help="specify gdb port number")
     parser.add_argument("--script", action="store",
                         help="XEN define configuration script for vif")

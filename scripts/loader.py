@@ -190,14 +190,14 @@ def translate(path):
     return None
 
 class Connect(gdb.Command):
-    '''Connect to a local kvm instance at given port (default :1234)'''
+    '''Connect to a local kvm instance at given port (default :2234)'''
     def __init__(self):
         gdb.Command.__init__(self,
                              'connect',
                              gdb.COMMAND_NONE,
                              gdb.COMPLETE_NONE)
     def invoke(self, arg, from_tty):
-        host_port = 'localhost:1234'
+        host_port = 'localhost:2234'
         if arg:
             host_port = arg.split()[0]
         gdb.execute('target remote %s' % host_port)

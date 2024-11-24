@@ -1627,6 +1627,10 @@ static void early_free_page(void* v)
     free_page_range(pr);
 }
 
+void *translate_mem(uint8_t from, uint8_t to, void *object) {
+  return mmu::translate_mem_area(static_cast<mmu::mem_area>(from), static_cast<mmu::mem_area>(to), object);
+}
+
 void *physically_alloc_page() {
   WITH_LOCK(free_page_ranges_lock) {
     on_alloc(page_size);

@@ -1093,6 +1093,13 @@ ifeq ($(conf_tracepoints),1)
 objects += core/sampler.o
 endif
 
+objects += core/llfree/bitfield.o
+objects += core/llfree/llfree.o
+objects += core/llfree/child.o
+objects += core/llfree/local.o
+objects += core/llfree/lower.o
+objects += core/llfree/tree.o
+
 objects += linux.o
 objects += core/commands.o
 objects += core/sched.o

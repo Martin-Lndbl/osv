@@ -2,7 +2,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdint.h>
+#include <stdio.h>
 #include <sys/cdefs.h>
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -18,7 +18,7 @@
 /// Number of Bytes in cacheline
 #define LLFREE_CACHE_SIZE 64u
 
-#define LLFREE_FRAME_BITS 44 // TODO
+#define LLFREE_FRAME_BITS 12 // TODO
 /// Size of a base frame
 #define LLFREE_FRAME_SIZE (1u << LLFREE_FRAME_BITS)
 
@@ -50,7 +50,7 @@
 /// Minimal alignment the llc requires for its memory range
 #define LLFREE_ALIGN (1u << LLFREE_MAX_ORDER << LLFREE_FRAME_BITS)
 
-#define llfree_warn(str, ...) // TODO
+#define llfree_warn(fmt, ...) printf("Warning: " fmt "\n", ##__VA_ARGS__)
 
 #undef VERBOSE
 #ifdef VERBOSE
@@ -72,8 +72,10 @@
 #endif
 
 void __attribute__((noinline)) llfree_panic(void);
-#define assert(cond)
-// do { if (!(cond)) { TODO \ llfree_panic(); } } while (0)
+
+#define assert(cond)                                                           \
+  if (!(cond))                                                                 \
+    printf("FAILING assertion skipped: %s\n", #cond);
 
 static const int ATOM_LOAD_ORDER = __ATOMIC_ACQUIRE;
 static const int ATOM_UPDATE_ORDER = __ATOMIC_ACQ_REL;

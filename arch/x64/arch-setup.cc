@@ -11,7 +11,7 @@
 #include "arch-setup.hh"
 #include <osv/mempool.hh>
 #include <osv/mmu.hh>
-#include "osv/dev-llfree.h"
+#include <osv/dev-llfree.h>
 #include "processor.hh"
 #include "processor-flags.h"
 #include "msr.hh"
@@ -104,8 +104,16 @@ extern "C" void start32_from_vmlinuz();
 void * __attribute__((section (".start32_from_vmlinuz_address"))) start32_from_vmlinuz_address =
   reinterpret_cast<void*>((long)&start32_from_vmlinuz - OSV_KERNEL_VM_SHIFT);
 
-uint64_t size_already_added = 0;
-uint64_t stock_allocator_reserved_memory_size = 32ull * 1024 * 1024 * 1024;
+// Initialize global variables
+void * start_virtual_region{nullptr};
+u64 start_physical_region{0};
+
+u64 size_memory_region{0};
+u64 curr_memory_region{0};
+
+// Keep track of reserved memory sizes
+u64 currently_reserved{0};
+
 void arch_setup_free_memory()
 {
     static ulong edata, edata_phys;
@@ -119,14 +127,11 @@ void arch_setup_free_memory()
     auto e820_size = mb.mmap_length;
     memcpy(e820_buffer, reinterpret_cast<void*>(mb.mmap_addr), e820_size);
     for_each_e820_entry(e820_buffer, e820_size, [] (e820ent ent) {
-        if(memory::phys_mem_size + ent.size > stock_allocator_reserved_memory_size){
-            if(memory::phys_mem_size < stock_allocator_reserved_memory_size){
-                ent.size = stock_allocator_reserved_memory_size - memory::phys_mem_size;
-            }else{
-                ent.size=0;
-            }
+        if(memory::phys_mem_size + ent.size < OSV_RESERVE_MEMORY)
+            memory::phys_mem_size += ent.size;
+        else if (memory::phys_mem_size < OSV_RESERVE_MEMORY){
+            memory::phys_mem_size = OSV_RESERVE_MEMORY;
         }
-        memory::phys_mem_size += ent.size;
     });
     constexpr u64 initial_map = 1 << 30; // 1GB mapped by startup code
 
@@ -151,7 +156,6 @@ void arch_setup_free_memory()
         if(mmu::phys_bits > mmu::max_phys_bits){
             mmu::phys_bits = mmu::max_phys_bits;
         }
-        assert(mmu::phys_bits <= mmu::max_phys_bits);
     }
 
     setup_temporary_phys_map();
@@ -198,6 +202,8 @@ void arch_setup_free_memory()
     parse_cmdline(mb);
     // now that we have some free memory, we can start mapping the rest
     mmu::switch_to_runtime_page_tables();
+
+    printf("Distributing Memory between me and OSv:\n");
     for_each_e820_entry(e820_buffer, e820_size, [] (e820ent ent) {
         //
         // Free the memory below elf_phys_start which we could not before
@@ -220,25 +226,41 @@ void arch_setup_free_memory()
         if (intersects(ent, initial_map)) {
             ent = truncate_below(ent, initial_map);
         }
-        //printf("already reserved size: %lu, needed : %lu\n", size_already_added, stock_allocator_reserved_memory_size);
-        //printf("ent region -- addr: %18x, size: %lu\n", ent.addr, ent.size);
-        uint64_t newAddr = ent.addr, newSize = ent.size;
-        if(size_already_added + ent.size > stock_allocator_reserved_memory_size){
-            if(size_already_added < stock_allocator_reserved_memory_size){
-                ent.size = stock_allocator_reserved_memory_size - size_already_added;
-                newSize -= ent.size;
-                newAddr += ent.size;
-            }else{
-                ent.size=0;
+
+        if (currently_reserved + ent.size < OSV_RESERVE_MEMORY) {
+            // Whole e820 region needed to statisfy reserved
+        } else if ( currently_reserved < OSV_RESERVE_MEMORY) {
+            // Part of e820 region needed to statisfy reserved
+            size_t reserved_for_osv = OSV_RESERVE_MEMORY - currently_reserved;
+            start_physical_region = ent.addr + reserved_for_osv;
+            size_memory_region = ent.size - reserved_for_osv;
+            ent.size -= reserved_for_osv;  // Ensure the remaining size reflects what's left
+            ent.addr += reserved_for_osv; // Update the starting address for the remaining region
+
+            // We also want our stolen memory to be mapped
+            for (auto&& area : mmu::identity_mapped_areas) {
+                auto base = reinterpret_cast<void*>(get_mem_area_base(area));
+                mmu::linear_map(base + start_physical_region, start_physical_region, size_memory_region,
+                   area == mmu::mem_area::main ? "main" :
+                   area == mmu::mem_area::page ? "page" : "mempool", ~0);
             }
-            //printf("ent region -- addr: %18x, size: %lu, phys region -- addr: %18x, size : %lu\n", ent.addr, ent.size, newAddr, newSize);
-            startPhysRegion = newAddr;
-            sizePhysRegion = newSize;
-            if(ent.size==0){
-                return;
+        } else {
+            // Reserved already fulfilled, we may steal the entire region
+            start_physical_region = ent.addr;
+            size_memory_region = ent.size;
+
+            // We also want our stolen memory to be mapped
+            for (auto&& area : mmu::identity_mapped_areas) {
+                auto base = reinterpret_cast<void*>(get_mem_area_base(area));
+                mmu::linear_map(base + start_physical_region, start_physical_region, size_memory_region,
+                   area == mmu::mem_area::main ? "main" :
+                   area == mmu::mem_area::page ? "page" : "mempool", ~0);
             }
+
+            // There is no reserved memory here OSv would want to map
+            return;
         }
-        size_already_added += ent.size;
+
         for (auto&& area : mmu::identity_mapped_areas) {
             auto base = reinterpret_cast<void*>(get_mem_area_base(area));
             mmu::linear_map(base + ent.addr, ent.addr, ent.size,
@@ -247,6 +269,7 @@ void arch_setup_free_memory()
         }
         mmu::free_initial_memory_range(ent.addr, ent.size);
     });
+    start_virtual_region = reinterpret_cast<void*>(get_mem_area_base(mmu::mem_area::page)) + start_physical_region;
 }
 
 void arch_setup_tls(void *tls, const elf::tls_data& info)

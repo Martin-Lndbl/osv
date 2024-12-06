@@ -1,6 +1,10 @@
-#include "inner.h"
-#include "utils.h"
+#include "osv/llfree.h"
 #include "child.h"
+#include "inner.h"
+#include "osv/dev-llfree.h"
+#include "osv/types.h"
+#include "sys/types.h"
+#include "utils.h"
 #include <stdio.h>
 
 /// Returns the local data of given core
@@ -67,8 +71,55 @@ static ll_unused bool check_meta(llfree_meta_t meta, llfree_meta_size_t sizes) {
           meta.trees + sizes.trees <= meta.lower);
 }
 
-void llfree_setup(){
+// TODO: Think about numa
+void *llfree_ext_alloc(uint align, size_t size) {
+  void *aligned_mem =
+      start_virtual_region + ((u64)start_virtual_region % align);
+
+  if (aligned_mem + size > start_virtual_region + size_memory_region) {
+    printf("Out of memory\n");
+    return NULL;
+  }
+
+  printf("allocating %lu bytes of %lu byte aligned memory from %18x - % 18x\n ",
+         size, align, start_virtual_region, aligned_mem + size);
+  start_virtual_region = aligned_mem + size;
+  curr_memory_region += (u64)aligned_mem + size;
+  return aligned_mem;
+}
+
+void llfree_setup() {
   printf("Hello from C\n");
+  printf("Memory size: %lu\n", size_memory_region);
+  printf("Start address of virtual memory: %8x\n", size_memory_region);
+
+  unsigned cores = 1;
+  // TODO: This might not be the right number of frames since llfree
+  // datastructure takes up a few
+  unsigned frames = size_memory_region / 4069;
+
+  llfree_t *self = llfree_ext_alloc(LLFREE_CACHE_SIZE, sizeof(llfree_t));
+  llfree_meta_size_t m = llfree_metadata_size(cores, frames);
+
+  printf("LLFREE METADATA\nllfree: %lu\nlocal: %lu\ntrees: %lu\nlower: % lu\n ",
+         m.llfree, m.local, m.trees, m.lower);
+
+  llfree_meta_t meta = {
+      .local = llfree_ext_alloc(LLFREE_CACHE_SIZE, m.local),
+      .trees = llfree_ext_alloc(LLFREE_CACHE_SIZE, m.trees),
+      .lower = llfree_ext_alloc(LLFREE_CACHE_SIZE, m.lower),
+  };
+  printf("LLFREE METADATA OVERVIEW\nllfree: %18x\nlocal: %18x\ntrees: "
+         "%18x\nlower: %18x\n",
+         self, meta.local, meta.trees, meta.lower);
+
+  llfree_result_t ret =
+      llfree_init(self, cores, frames, LLFREE_INIT_ALLOC, meta);
+  if (llfree_is_ok(ret)) {
+    printf("llfree is happy\n");
+  } else {
+    printf("llfree is dead\n");
+  }
 }
 
 llfree_result_t llfree_init(llfree_t *self, size_t cores, size_t frames,
@@ -89,6 +140,9 @@ llfree_result_t llfree_init(llfree_t *self, size_t cores, size_t frames,
   if (!llfree_is_ok(res)) {
     return res;
   }
+
+  printf("lower init successful\n");
+  return llfree_err(LLFREE_ERR_INIT);
 
   // check if more cores than trees -> if not shared locale data
   self->trees_len = div_ceil(frames, LLFREE_TREE_SIZE);

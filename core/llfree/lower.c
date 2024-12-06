@@ -1,4 +1,5 @@
 #include "lower.h"
+#include <stdio.h>
 
 #define CHILD_N LLFREE_CHILD_SIZE
 
@@ -82,7 +83,17 @@ static void lower_recover(lower_t *self) {
 
 llfree_result_t lower_init(lower_t *self, size_t frames, uint8_t init,
                            uint8_t *primary) {
+
+  printf("self located at %18x\n", self);
+  printf("self->frames located at %18x\n", &(self->frames));
+  printf("self->fields located at %18x\n", &(self->fields));
+  printf("self->children located at %18x\n", &(self->children));
+  return llfree_err(LLFREE_ERR_INIT);
   self->frames = frames;
+
+  printf("------- lower init -------\n");
+  printf("frames: %lu\n", self->frames);
+
   size_t child_c = child_count(self);
   size_t bitfield_size =
       align_up(sizeof(bitfield_t) * child_c, sizeof(children_t));

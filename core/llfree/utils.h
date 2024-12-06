@@ -1,7 +1,6 @@
 #pragma once
 
 #include "platform.h"
-#include <stdio.h>
 #include <osv/llfree.h>
 
 /// Minimal size the LLFree can manage

@@ -1844,9 +1844,14 @@ void free_initial_memory_range(void* addr, size_t size)
     free_page_ranges.initial_add(pr);
 }
 
+extern "C" {
+    void llfree_setup();
+}
+
 void  __attribute__((constructor(init_prio::mempool))) setup()
 {
     arch_setup_free_memory();
+    llfree_setup();
 }
 
 }

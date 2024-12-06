@@ -14,12 +14,12 @@ typedef uint32_t treeF_t;
 
 /// Tree entry
 typedef struct tree {
-	/// Number of free frames in this tree
-	treeF_t free : LLFREE_TREE_ORDER + 1;
-	/// Whether this tree has been reserved
-	bool reserved : 1;
-	/// The kind of pages this tree contains
-	uint8_t kind : 2;
+  /// Number of free frames in this tree
+  treeF_t free : LLFREE_TREE_ORDER + 1;
+  /// Whether this tree has been reserved
+  bool reserved : 1;
+  /// The kind of pages this tree contains
+  uint8_t kind : 2;
 } tree_t;
 
 /// Contains immovable pages
@@ -31,7 +31,7 @@ typedef struct tree {
 #define TREE_KINDS (uint8_t)(3u)
 
 typedef struct p_range {
-	treeF_t min, max;
+  treeF_t min, max;
 } p_range_t;
 
 /// Lower bound used by the tree search heuristics
@@ -39,10 +39,9 @@ typedef struct p_range {
 
 /// Create a new tree entry
 static inline ll_unused tree_t tree_new(treeF_t counter, bool reserved,
-				      uint8_t kind)
-{
-	assert(counter <= LLFREE_TREE_SIZE); // max limit for 15 bit
-	return (tree_t){ counter, reserved, kind };
+                                        uint8_t kind) {
+  assert(counter <= LLFREE_TREE_SIZE); // max limit for 15 bit
+  return (tree_t){counter, reserved, kind};
 }
 
 /// Increment the free counter
@@ -64,4 +63,4 @@ bool tree_steal_counter(tree_t *self, treeF_t min);
 
 /// Increment the free counter or reserve if specified
 bool tree_inc_or_reserve(tree_t *self, treeF_t free, bool *reserve,
-			 treeF_t min);
+                         treeF_t min);

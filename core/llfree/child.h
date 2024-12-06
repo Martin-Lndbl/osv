@@ -4,22 +4,22 @@
 
 /// Index entry for every bitfield
 typedef struct child {
-	/// Counter for free base frames in this region
-	uint16_t free : 14;
-	/// Whether this has been allocated as a single huge page
-	bool huge : 1;
-	/// Hint for the guest that this region has been reclaimed and potentially been unmapped
-	bool reclaimed : 1;
+  /// Counter for free base frames in this region
+  uint16_t free : 14;
+  /// Whether this has been allocated as a single huge page
+  bool huge : 1;
+  /// Hint for the guest that this region has been reclaimed and potentially
+  /// been unmapped
+  bool reclaimed : 1;
 } child_t;
 
 _Static_assert(13 > LLFREE_CHILD_ORDER, "child counter size");
 
 /// Initializes the child entry with the given parameters
 static inline child_t ll_unused child_new(uint16_t free, bool huge,
-					bool reclaimed)
-{
-	assert(free <= LLFREE_CHILD_SIZE);
-	return (child_t){ .free = free, .huge = huge, .reclaimed = reclaimed };
+                                          bool reclaimed) {
+  assert(free <= LLFREE_CHILD_SIZE);
+  return (child_t){.free = free, .huge = huge, .reclaimed = reclaimed};
 }
 
 /// Increment the free counter if possible
@@ -34,7 +34,7 @@ bool child_set_huge(child_t *self, bool allow_reclaimed);
 bool child_clear_huge(child_t *self);
 
 typedef struct child_pair {
-	child_t first, second;
+  child_t first, second;
 } child_pair_t;
 
 /// Alloc a pair of child entries

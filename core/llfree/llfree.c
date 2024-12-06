@@ -1,6 +1,7 @@
 #include "inner.h"
 #include "utils.h"
 #include "child.h"
+#include <stdio.h>
 
 /// Returns the local data of given core
 static inline local_t *get_local(llfree_t *self, size_t core) {
@@ -64,6 +65,10 @@ static ll_unused bool check_meta(llfree_meta_t meta, llfree_meta_size_t sizes) {
           meta.trees + sizes.trees <= meta.local) &&
          (meta.lower + sizes.lower <= meta.trees ||
           meta.trees + sizes.trees <= meta.lower);
+}
+
+void llfree_setup(){
+  printf("Hello from C\n");
 }
 
 llfree_result_t llfree_init(llfree_t *self, size_t cores, size_t frames,

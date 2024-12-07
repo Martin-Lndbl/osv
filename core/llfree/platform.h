@@ -123,15 +123,14 @@ static const int ATOM_STORE_ORDER = __ATOMIC_RELEASE;
     __atomic_store(__atomic_store_ptr, &__atomic_store_tmp, (order));          \
   })
 
-#define __c11_atomic_exchange(obj, val, order)                                  \
-        __extension__({                                                       \
-		__auto_type __atomic_exchange_ptr = (obj);                    \
-		__typeof__((void)0, *__atomic_exchange_ptr) __atomic_exchange_tmp = \
-			(val);                                                \
-		__atomic_exchange(__atomic_exchange_ptr, &__atomic_exchange_tmp, \
-				   &__atomic_exchange_tmp, (order));            \
-		__atomic_exchange_tmp;                                        \
-	}
+#define __c11_atomic_exchange(obj, val, order)                                 \
+  __extension__({                                                              \
+    __auto_type __atomic_exchange_ptr = (obj);                                 \
+    __typeof__((void)0, *__atomic_exchange_ptr) __atomic_exchange_tmp = (val); \
+    __atomic_exchange(__atomic_exchange_ptr, &__atomic_exchange_tmp,           \
+                      &__atomic_exchange_tmp, (order));                        \
+    __atomic_exchange_tmp;                                                     \
+  })
 
 #endif
 
@@ -177,7 +176,7 @@ static const int ATOM_STORE_ORDER = __ATOMIC_RELEASE;
 #define atom_swap(obj, desired)                                                \
   ({                                                                           \
     llfree_debug("swap");                                                      \
-    __c11_atomic_exchange(obj, desired, ATOM_UPDATE_ORDER));                   \
+    __c11_atomic_exchange((obj), (desired), ATOM_UPDATE_ORDER);                \
   })
 
 /// Atomic fetch-modify-update macro.

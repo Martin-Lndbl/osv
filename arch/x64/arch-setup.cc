@@ -229,13 +229,36 @@ void arch_setup_free_memory()
 
         if (currently_reserved + ent.size < OSV_RESERVE_MEMORY) {
             // Whole e820 region needed to statisfy reserved
-        } else if ( currently_reserved < OSV_RESERVE_MEMORY) {
+#ifdef DOCUMENT_RESERVATION
+            printf("--------------- e820 ---------------\n");
+            printf("    ent_addr: 0x%lx\n", ent.addr);
+            printf("    ent_size: 0x%lx\n", ent.size);
+            printf("    llf_size: None\n");
+            printf("    llf_size: None\n");
+#endif
+            currently_reserved += ent.size;
+        } else if (currently_reserved < OSV_RESERVE_MEMORY) {
             // Part of e820 region needed to statisfy reserved
-            size_t reserved_for_osv = OSV_RESERVE_MEMORY - currently_reserved;
-            start_physical_region = ent.addr + reserved_for_osv;
-            size_memory_region = ent.size - reserved_for_osv;
-            ent.size -= reserved_for_osv;  // Ensure the remaining size reflects what's left
-            ent.addr += reserved_for_osv; // Update the starting address for the remaining region
+
+#ifdef DOCUMENT_RESERVATION
+            printf("--------------- e820 ---------------\n");
+            printf("    tot_addr: 0x%lx\n", ent.addr);
+            printf("    tot_size: 0x%lx\n", ent.size);
+#endif
+
+            size_t needed_for_osv = OSV_RESERVE_MEMORY - currently_reserved;
+            start_physical_region = ent.addr + needed_for_osv;
+            size_memory_region = ent.size - needed_for_osv;
+            ent.size = needed_for_osv;
+
+            currently_reserved += needed_for_osv;
+
+#ifdef DOCUMENT_RESERVATION
+            printf("    ent_addr: 0x%lx\n", ent.addr);
+            printf("    ent_size: 0x%lx\n", ent.size);
+            printf("    llf_size: 0x%lx\n", start_physical_region);
+            printf("    llf_size: 0x%lx\n", size_memory_region);
+#endif
 
             // We also want our stolen memory to be mapped
             for (auto&& area : mmu::identity_mapped_areas) {
@@ -248,6 +271,14 @@ void arch_setup_free_memory()
             // Reserved already fulfilled, we may steal the entire region
             start_physical_region = ent.addr;
             size_memory_region = ent.size;
+
+#ifdef DOCUMENT_RESERVATION
+            printf("--------------- e820 ---------------\n");
+            printf("    ent_addr: None\n");
+            printf("    ent_size: None\n");
+            printf("    llf_size: 0x%lx\n", start_physical_region);
+            printf("    llf_size: 0x%lx\n", size_memory_region);
+#endif
 
             // We also want our stolen memory to be mapped
             for (auto&& area : mmu::identity_mapped_areas) {

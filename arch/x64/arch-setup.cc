@@ -203,7 +203,9 @@ void arch_setup_free_memory()
     // now that we have some free memory, we can start mapping the rest
     mmu::switch_to_runtime_page_tables();
 
+#ifdef DOCUMENT_RESERVATION
     printf("Distributing Memory between me and OSv:\n");
+#endif
     for_each_e820_entry(e820_buffer, e820_size, [] (e820ent ent) {
         //
         // Free the memory below elf_phys_start which we could not before
@@ -233,7 +235,7 @@ void arch_setup_free_memory()
             printf("--------------- e820 ---------------\n");
             printf("    ent_addr: 0x%lx\n", ent.addr);
             printf("    ent_size: 0x%lx\n", ent.size);
-            printf("    llf_size: None\n");
+            printf("    llf_addr: None\n");
             printf("    llf_size: None\n");
 #endif
             currently_reserved += ent.size;
@@ -256,7 +258,7 @@ void arch_setup_free_memory()
 #ifdef DOCUMENT_RESERVATION
             printf("    ent_addr: 0x%lx\n", ent.addr);
             printf("    ent_size: 0x%lx\n", ent.size);
-            printf("    llf_size: 0x%lx\n", start_physical_region);
+            printf("    llf_addr: 0x%lx\n", start_physical_region);
             printf("    llf_size: 0x%lx\n", size_memory_region);
 #endif
 
@@ -276,7 +278,7 @@ void arch_setup_free_memory()
             printf("--------------- e820 ---------------\n");
             printf("    ent_addr: None\n");
             printf("    ent_size: None\n");
-            printf("    llf_size: 0x%lx\n", start_physical_region);
+            printf("    llf_addr: 0x%lx\n", start_physical_region);
             printf("    llf_size: 0x%lx\n", size_memory_region);
 #endif
 

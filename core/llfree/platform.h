@@ -1,5 +1,6 @@
 #pragma once
 
+#include <osv/dev-llfree.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -50,14 +51,13 @@
 /// Minimal alignment the llc requires for its memory range
 #define LLFREE_ALIGN (1u << LLFREE_MAX_ORDER << LLFREE_FRAME_BITS)
 
-#define llfree_warn(fmt, ...) printf("Warning: " fmt "\n", ##__VA_ARGS__)
+#define llfree_warn(fmt, ...) printf("[Warning]: " fmt "\n", ##__VA_ARGS__)
 
-#undef VERBOSE
 #ifdef VERBOSE
-#define llfree_info_start() pr_info("")
-#define llfree_info_cont(str, ...) pr_cont(str, ##__VA_ARGS__)
+#define llfree_info_start()
+#define llfree_info_cont(str, ...) printf(str , ##__VA_ARGS__)
 #define llfree_info_end()
-#define llfree_info(str, ...) pr_info(str, ##__VA_ARGS__)
+#define llfree_info(fmt, ...) printf(fmt , ##__VA_ARGS__)
 #else
 #define llfree_info(str, ...)
 #define llfree_info_start()

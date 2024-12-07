@@ -3,6 +3,7 @@
 #include "inner.h"
 #include "osv/dev-llfree.h"
 #include "osv/types.h"
+#include "platform.h"
 #include "sys/types.h"
 #include "utils.h"
 #include <stdio.h>
@@ -77,7 +78,7 @@ void *llfree_ext_alloc(uint align, size_t size) {
       start_virtual_region + ((u64)start_virtual_region % align);
 
   if (aligned_mem + size > start_virtual_region + size_memory_region) {
-    printf("Out of memory\n");
+    llfree_warn("Out of memory\n");
     return NULL;
   }
 
@@ -87,9 +88,10 @@ void *llfree_ext_alloc(uint align, size_t size) {
 }
 
 void llfree_setup() {
-  printf("------------------------- LLFREE SETUP ------------------------\n");
-  printf("Memory size: %lu\n", size_memory_region);
-  printf("Start address of virtual memory: %lx\n", start_virtual_region);
+  llfree_info(
+      "------------------------- LLFREE SETUP ------------------------\n");
+  llfree_info("Memory size: 0x%lx\n", size_memory_region);
+  llfree_info("Start address of virtual memory: 0x%lx\n", start_virtual_region);
 
   unsigned cores = 1;
   // TODO: This might not be the right number of frames since llfree
@@ -104,14 +106,34 @@ void llfree_setup() {
       .trees = llfree_ext_alloc(LLFREE_CACHE_SIZE, m.trees),
       .lower = llfree_ext_alloc(LLFREE_CACHE_SIZE, m.lower),
   };
-  printf("LLFREE METADATA OVERVIEW\n  llfree: %lx\n   local: %lx\n   trees: "
-         "%lx\n   lower: %lx\n",
-         self, meta.local, meta.trees, meta.lower);
+  llfree_info(
+      "LLFREE METADATA OVERVIEW\n  llfree: 0x%lx\n   local: 0x%lx\n   trees: "
+      "0x%lx\n   lower: 0x%lx\n",
+      self, meta.local, meta.trees, meta.lower);
 
   llfree_result_t ret =
-      llfree_init(self, cores, frames, LLFREE_INIT_ALLOC, meta);
-  printf("------------------------- STATUS: %s ------------------------\n",
-         llfree_is_ok(ret) ? "HAPPY" : "DEAD --");
+      llfree_init(self, cores, frames, LLFREE_INIT_FREE, meta);
+  llfree_info("------------------------ STATUS: %s ------------------------\n",
+              llfree_is_ok(ret) ? "HAPPY" : "DEAD --");
+
+  if (llfree_is_ok(ret)) {
+
+    // llfree_print(self);
+
+    llfree_validate(self);
+    llfree_info("frames: 0x%lx\n", llfree_frames(self));
+    llfree_result_t a = llfree_get(self, 0, llflags(0));
+    llfree_info("frames: 0x%lx\n", llfree_free_frames(self));
+
+
+    llfree_info("frame allocated at: 0x%lx\n", a.frame);
+
+
+    llfree_result_t f = llfree_put(self, 0, a.frame, llflags(LLFREE_FRAME_SIZE));
+    llfree_info("frames: 0x%lx\n", llfree_free_frames(self));
+    if (!llfree_is_ok(f))
+      llfree_warn("Im not ok");
+  }
 }
 
 llfree_result_t llfree_init(llfree_t *self, size_t cores, size_t frames,

@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cassert>
 #include "platform.h"
 #include <osv/llfree.h>
+
 
 /// Minimal size the LLFree can manage
 #define MIN_PAGES (1ul << LLFREE_MAX_ORDER)

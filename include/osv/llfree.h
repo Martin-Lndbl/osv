@@ -106,9 +106,6 @@ typedef struct llfree_meta {
   uint8_t *lower;
 } llfree_meta_t;
 
-// TODO fix
-void llfree_setup();
-
 /// Allocate and initialize the data structures of the allocator.
 ///
 /// `offset` is the number of the first page to be managed and `len` determins

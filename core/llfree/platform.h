@@ -19,7 +19,7 @@
 /// Number of Bytes in cacheline
 #define LLFREE_CACHE_SIZE 64u
 
-#define LLFREE_FRAME_BITS 12 // TODO
+#define LLFREE_FRAME_BITS 12
 /// Size of a base frame
 #define LLFREE_FRAME_SIZE (1u << LLFREE_FRAME_BITS)
 
@@ -29,7 +29,7 @@
 #define LLFREE_MAX_ORDER (LLFREE_HUGE_ORDER + 1u)
 
 /// Num of bits of the larges atomic type of the architecture
-#define LLFREE_ATOMIC_ORDER 6u
+#define LLFREE_ATOMIC_ORDER 6u //TODO shouldn't this be 8?
 #define LLFREE_ATOMIC_SIZE (1u << LLFREE_ATOMIC_ORDER)
 
 /// Number of frames in a child
@@ -72,10 +72,6 @@
 #endif
 
 void __attribute__((noinline)) llfree_panic(void);
-
-#define assert(cond)                                                           \
-  if (!(cond))                                                                 \
-    printf("FAILING assertion skipped: %s\n", #cond);
 
 static const int ATOM_LOAD_ORDER = __ATOMIC_ACQUIRE;
 static const int ATOM_UPDATE_ORDER = __ATOMIC_ACQ_REL;

@@ -303,6 +303,8 @@ void arch_setup_free_memory()
         mmu::free_initial_memory_range(ent.addr, ent.size);
     });
     start_virtual_region = reinterpret_cast<void*>(get_mem_area_base(mmu::mem_area::page)) + start_physical_region;
+    start_physical_region += get_mem_area_base(mmu::mem_area::main);
+
 }
 
 void arch_setup_tls(void *tls, const elf::tls_data& info)

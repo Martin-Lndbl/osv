@@ -37,6 +37,8 @@
 #include <osv/migration-lock.hh>
 #include <osv/export.h>
 
+#include <osv/llfree.h>
+
 #include <osv/kernel_config_lazy_stack.h>
 #include <osv/kernel_config_lazy_stack_invariant.h>
 #include <osv/kernel_config_memory_debug.h>
@@ -1846,12 +1848,39 @@ void free_initial_memory_range(void* addr, size_t size)
 
 extern "C" {
     void llfree_setup();
+    uint64_t llfree_alloc(llflags_t flags, size_t core);
+    bool llfree_free(uint64_t frame, size_t core);
 }
 
 void  __attribute__((constructor(init_prio::mempool))) setup()
 {
     arch_setup_free_memory();
     llfree_setup();
+
+    uint64_t frame = llfree_alloc(llflags(0), 0);
+    if(frame){
+      printf("phys = 0x%lx\n", frame);
+        void *virt = translate_mem_area( mmu::mem_area::main, mmu::mem_area::page,
+          reinterpret_cast<void *>(frame));
+      printf("virt = 0x%lx\n", virt);
+
+      uint64_t *pages =  reinterpret_cast<uint64_t *>(virt);
+
+      for(size_t i = 0; i < 64; i++){
+          pages[i] = llfree_alloc(llflags(0), 0);
+      }
+
+      for(size_t i = 0; i < 64; i++){
+          llfree_free(pages[i], 0);
+      }
+
+      void *to_free = translate_mem_area( mmu::mem_area::page, mmu::mem_area::main, virt);
+      printf("phys = 0x%lx\n", to_free);
+
+      if(!llfree_free(reinterpret_cast<uint64_t>(to_free), 0))
+        printf("Freeing page 0x%lx failed\n", to_free);
+    }
+
 }
 
 }

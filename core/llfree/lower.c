@@ -182,6 +182,8 @@ static llfree_result_t lower_get_inner(lower_t *self, uint64_t frame,
 
 llfree_result_t lower_get(lower_t *self, const uint64_t start_frame,
                           size_t order) {
+  // llfree_info("lower_get(\n  self=0x%lx,\n  start_frame=0x%lx,\n  order=%lu\n)",
+  //             self, start_frame, order);
   assert(order <= LLFREE_MAX_ORDER);
   assert(start_frame < self->frames);
 

@@ -87,10 +87,34 @@ void *llfree_ext_alloc(uint align, size_t size) {
   return aligned_mem;
 }
 
+uint64_t llfree_alloc(llflags_t flags, size_t core) {
+  if (llfree) {
+    llfree_result_t a = llfree_get(llfree, core, flags);
+    return llfree_is_ok(a) ? (a.frame + start_physical_region) : 0;
+  }
+  llfree_warn("Received allocation request for llfree but llfree is dead");
+  return 0;
+}
+
+bool llfree_free(uint64_t frame, size_t core) {
+  if (llfree) {
+    return llfree_is_ok(llfree_put(llfree, core, frame - start_physical_region,
+                                   llflags(LLFREE_FRAME_SIZE)));
+  }
+  llfree_warn("Received free request for llfree but llfree is dead");
+  return 0;
+}
+
+llfree_t *llfree;
 void llfree_setup() {
+  if (size_memory_region == 0)
+    return;
+
   llfree_info(
       "------------------------- LLFREE SETUP ------------------------\n");
   llfree_info("Memory size: 0x%lx\n", size_memory_region);
+  llfree_info("Start address of physical memory: 0x%lx\n",
+              start_physical_region);
   llfree_info("Start address of virtual memory: 0x%lx\n", start_virtual_region);
 
   unsigned cores = 1;
@@ -113,26 +137,14 @@ void llfree_setup() {
 
   llfree_result_t ret =
       llfree_init(self, cores, frames, LLFREE_INIT_FREE, meta);
-  llfree_info("------------------------ STATUS: %s ------------------------\n",
-              llfree_is_ok(ret) ? "HAPPY" : "DEAD --");
-
   if (llfree_is_ok(ret)) {
-
-    // llfree_print(self);
-
-    llfree_validate(self);
-    llfree_info("frames: 0x%lx\n", llfree_frames(self));
-    llfree_result_t a = llfree_get(self, 0, llflags(0));
-    llfree_info("frames: 0x%lx\n", llfree_free_frames(self));
-
-
-    llfree_info("frame allocated at: 0x%lx\n", a.frame);
-
-
-    llfree_result_t f = llfree_put(self, 0, a.frame, llflags(LLFREE_FRAME_SIZE));
-    llfree_info("frames: 0x%lx\n", llfree_free_frames(self));
-    if (!llfree_is_ok(f))
-      llfree_warn("Im not ok");
+    llfree = self;
+    llfree_info(
+        "------------------------- STATUS: HAPPY ------------------------\n");
+  } else {
+    llfree = NULL;
+    llfree_info(
+        "------------------------- STATUS: DEAD -------------------------\n");
   }
 }
 
@@ -188,7 +200,9 @@ typedef llfree_result_t (*search_fn)(llfree_t *self, size_t idx, void *args);
 /// range, and executes the callback for it until it stops returning ERR_MEMORY.
 static llfree_result_t search(llfree_t *self, uint64_t start, uint64_t offset,
                               uint64_t len, search_fn callback, void *args) {
+  // llfree_info("search(\n  start=0x%lx,\n  offset=0x%lx,\n len=0x%lx\n)\n\n");
   int64_t base = (int64_t)(start + self->trees_len);
+  // llfree_info("base = 0x%lx\n", base);
   for (int64_t i = (int64_t)offset; i < (int64_t)len; ++i) {
     // Search alternating left and right from start
     int64_t off = i % 2 == 0 ? i / 2 : -((i + 1) / 2);
@@ -302,8 +316,10 @@ static llfree_result_t reserve_and_get(llfree_t *self, size_t core,
 
   uint64_t start = old.present ? tree_from_row(old.start_row)
                                : (self->trees_len / self->cores * core);
+
   assert(start < self->trees_len);
   start = align_down(start, cl_trees);
+  // llfree_info("start: 0x%lx\n", start);
 
   size_t near = (self->trees_len / self->cores) / 4;
   near = LL_MIN(LL_MAX(near, cl_trees / 4), cl_trees * 2);
@@ -365,11 +381,17 @@ static bool sync_with_global(llfree_t *self, local_t *local, uint8_t kind,
 
 static llfree_result_t get_from_local(llfree_t *self, size_t core, uint8_t kind,
                                       size_t order, reserved_t *old) {
+  // llfree_info(
+  //     "get_from_local(\n  "
+  //     "self=0x%lx,\n  core=%lu,\n  kind=%d,\n  order=%lu,\n  old.free=0x%lx,"
+  //     "\n  old.start_row=0x%lx\n)\n\n",
+  //     self, core, kind, order, old->free, old->start_row);
   local_t *local = get_local(self, core);
 
   // Try decrementing the local counter
   if (atom_update(&local->reserved[kind], *old, ll_reserved_dec,
                   (treeF_t)(1 << order))) {
+    // llfree_info("atomic update succeeded\n");
     llfree_result_t res =
         lower_get(&self->lower, frame_from_row(old->start_row), order);
     if (llfree_is_ok(res)) {
@@ -389,6 +411,7 @@ static llfree_result_t get_from_local(llfree_t *self, size_t core, uint8_t kind,
 
     return res;
   }
+  // llfree_info("atomic update failed\n");
 
   // Try synchronizing with global counter
   if (old->present && sync_with_global(self, local, kind, order, *old)) {

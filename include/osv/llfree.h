@@ -14,6 +14,10 @@
 #define ll_warn_unused
 #endif
 
+// TODO This belongs in platform.h, not here
+// Max page order 10, frame size 4096 => 4096 * 2^10 = 4MiB
+#define LLFREE_MAX_SIZE 4ull * 1024 * 1024
+
 /// Success
 #define LLFREE_ERR_OK ((uint8_t)0)
 /// Not enough memory
@@ -175,3 +179,8 @@ void llfree_print_debug(llfree_t *self, void (*writer)(void *, char *),
 void llfree_print(llfree_t *self);
 /// Validate the internal data structures
 void llfree_validate(llfree_t *self);
+
+
+// TODO: This shouldn't stay here
+extern llfree_t *llfee;
+

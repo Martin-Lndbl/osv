@@ -77,6 +77,7 @@ static size_t object_size(void* v);
 
 std::atomic<unsigned int> smp_allocator_cnt{};
 bool smp_allocator = false;
+bool llfree_allocator = false;
 OSV_LIBSOLARIS_API
 unsigned char *osv_reclaimer_thread;
 
@@ -1773,13 +1774,22 @@ void* alloc_page()
     return p;
 }
 
+extern "C" {
+    bool llfree_setup();
+    uint64_t llfree_alloc(llflags_t flags, size_t core);
+    bool llfree_free(uint64_t frame, size_t core);
+}
+
+
 static inline void untracked_free_page(void *v)
 {
     trace_memory_page_free(v);
-    if (!smp_allocator) {
-        return early_free_page(v);
-    }
-    page_pool::l1::free_page(v);
+    if(llfree_allocator)
+        llfree_free(reinterpret_cast<uint64_t>(v), 0);
+    else if (!smp_allocator)
+        early_free_page(v);
+    else
+        page_pool::l1::free_page(v);
 }
 
 void free_page(void* v)
@@ -1846,40 +1856,46 @@ void free_initial_memory_range(void* addr, size_t size)
     free_page_ranges.initial_add(pr);
 }
 
-extern "C" {
-    void llfree_setup();
-    uint64_t llfree_alloc(llflags_t flags, size_t core);
-    bool llfree_free(uint64_t frame, size_t core);
-}
-
 void  __attribute__((constructor(init_prio::mempool))) setup()
 {
     arch_setup_free_memory();
-    llfree_setup();
+    llfree_allocator = llfree_setup();
 
-    uint64_t frame = llfree_alloc(llflags(0), 0);
-    if(frame){
-      printf("phys = 0x%lx\n", frame);
-        void *virt = translate_mem_area( mmu::mem_area::main, mmu::mem_area::page,
-          reinterpret_cast<void *>(frame));
-      printf("virt = 0x%lx\n", virt);
-
-      uint64_t *pages =  reinterpret_cast<uint64_t *>(virt);
-
-      for(size_t i = 0; i < 64; i++){
-          pages[i] = llfree_alloc(llflags(0), 0);
-      }
-
-      for(size_t i = 0; i < 64; i++){
-          llfree_free(pages[i], 0);
-      }
-
-      void *to_free = translate_mem_area( mmu::mem_area::page, mmu::mem_area::main, virt);
-      printf("phys = 0x%lx\n", to_free);
-
-      if(!llfree_free(reinterpret_cast<uint64_t>(to_free), 0))
-        printf("Freeing page 0x%lx failed\n", to_free);
-    }
+    // if(llfree_allocator){
+    //
+    //   // TODO: remove this line as soon as allocation is fixed
+    //   llfree_allocator = false;
+    //
+    //   auto order = [](size_t s) -> size_t { size_t ret{0};
+    //         size_t ss{(s-1)/PAGE_SIZE}; while(ss > 0){ ss /= 2; ++ret; } return ret;};
+    //
+    //   printf("order(4096)=%d\n", order(4096));
+    //   printf("order(8000)=%d\n", order(8000));
+    //   printf("order(16000)=%d\n", order(16000));
+    //   printf("order(%d)=%d\n", LLFREE_MAX_SIZE, order(LLFREE_MAX_SIZE));
+    //
+    //   uint64_t frame = llfree_alloc(llflags(0), 0);
+    //   printf("phys = 0x%lx\n", frame);
+    //     void *virt = translate_mem_area( mmu::mem_area::main, mmu::mem_area::page,
+    //       reinterpret_cast<void *>(frame));
+    //   printf("virt = 0x%lx\n", virt);
+    //
+    //   uint64_t *pages =  reinterpret_cast<uint64_t *>(virt);
+    //
+    //   for(size_t i = 0; i < 11; i++){
+    //       pages[i] = llfree_alloc(llflags(i), 0);
+    //   }
+    //
+    //   for(size_t i = 0; i < 11; i++){
+    //       llfree_free(pages[i], 0);
+    //   }
+    //
+    //   void *to_free = translate_mem_area( mmu::mem_area::page, mmu::mem_area::main, virt);
+    //   printf("phys = 0x%lx\n", to_free);
+    //
+    //   if(!llfree_free(reinterpret_cast<uint64_t>(to_free), 0))
+    //     printf("Freeing page 0x%lx failed\n", to_free);
+    // }
 
 }
 
@@ -1897,7 +1913,15 @@ static inline void* std_malloc(size_t size, size_t alignment)
         return libc_error_ptr<void *>(ENOMEM);
     void *ret;
     size_t minimum_size = std::max(size, memory::pool::min_object_size);
-    if (smp_allocator && size <= memory::pool::max_object_size && alignment <= minimum_size) {
+    if(llfree_allocator && size < LLFREE_MAX_SIZE && alignment <= PAGE_SIZE){
+        // printf("requested 0x%lx bytes \n", size);
+        auto order = [size]() -> size_t { size_t ret{0};
+              size_t s{(size-1)/PAGE_SIZE}; while(s > 0 && ret < 10){ s /= 2; ++ret; } return ret;};
+        ret = reinterpret_cast<void *>(memory::llfree_alloc(llflags(order()), 0));
+        ret = translate_mem_area(mmu::mem_area::main, mmu::mem_area::page,
+                                 ret);
+        // printf("serving virtual page: 0x%lx\n", ret);
+    } else if (smp_allocator && size <= memory::pool::max_object_size && alignment <= minimum_size) {
         unsigned n = ilog2_roundup(minimum_size);
         ret = memory::malloc_pools[n].alloc();
         ret = translate_mem_area(mmu::mem_area::main, mmu::mem_area::mempool,
@@ -1993,6 +2017,7 @@ static inline void* std_realloc(void* object, size_t size)
 void free(void* object)
 {
     trace_memory_free(object);
+
     if (!object) {
         return;
     }

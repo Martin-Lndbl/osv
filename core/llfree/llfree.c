@@ -8,6 +8,7 @@
 #include "utils.h"
 #include <stdio.h>
 
+llfree_t *llfree;
 /// Returns the local data of given core
 static inline local_t *get_local(llfree_t *self, size_t core) {
   return &self->local[core % self->cores];
@@ -89,41 +90,68 @@ void *llfree_ext_alloc(uint align, size_t size) {
 
 uint64_t llfree_alloc(llflags_t flags, size_t core) {
   if (llfree) {
+    // llfree_info("received request for order %d\n", flags.order);
     llfree_result_t a = llfree_get(llfree, core, flags);
-    return llfree_is_ok(a) ? (a.frame + start_physical_region) : 0;
+    uint64_t phys = (a.frame << LLFREE_FRAME_BITS) + start_physical_region;
+    // llfree_info("allocated frame index  0x%lx\n", a.frame);
+    // llfree_info("returning phys page at 0x%lx\n", phys);
+    return llfree_is_ok(a) ? phys : 0;
   }
   llfree_warn("Received allocation request for llfree but llfree is dead");
   return 0;
 }
 
-bool llfree_free(uint64_t frame, size_t core) {
+bool llfree_free(uint64_t physaddr, size_t core) {
   if (llfree) {
-    return llfree_is_ok(llfree_put(llfree, core, frame - start_physical_region,
-                                   llflags(LLFREE_FRAME_SIZE)));
+    size_t idx = (physaddr - start_physical_region) >> LLFREE_FRAME_BITS;
+    // llfree_info("freeing phys page at 0x%lx\n", physaddr);
+    // llfree_info("freeing frame index  0x%lx\n", idx);
+    return llfree_is_ok(llfree_put(llfree, core, idx, llflags(0)));
   }
   llfree_warn("Received free request for llfree but llfree is dead");
   return 0;
 }
 
-llfree_t *llfree;
-void llfree_setup() {
+bool llfree_setup() {
   if (size_memory_region == 0)
-    return;
+    return false;
+
+  u64 end_physical_region = start_physical_region + size_memory_region;
 
   llfree_info(
       "------------------------- LLFREE SETUP ------------------------\n");
   llfree_info("Memory size: 0x%lx\n", size_memory_region);
   llfree_info("Start address of physical memory: 0x%lx\n",
               start_physical_region);
-  llfree_info("Start address of virtual memory: 0x%lx\n", start_virtual_region);
-
-  unsigned cores = 1;
-  // TODO: This might not be the right number of frames since llfree
-  // datastructure takes up a few
-  unsigned frames = size_memory_region / 4069;
+  llfree_info("End address of physical memory  : 0x%lx\n", end_physical_region);
 
   llfree_t *self = llfree_ext_alloc(LLFREE_CACHE_SIZE, sizeof(llfree_t));
+  unsigned cores = 1;
+  u64 frames = align_down(size_memory_region >> LLFREE_FRAME_BITS,
+                          1 << LLFREE_MAX_ORDER);
+
   llfree_meta_size_t m = llfree_metadata_size(cores, frames);
+  u64 meta_size = sizeof(llfree_t) + m.local + m.trees + m.lower;
+
+  // TODO remove the padding when meta is allocated in another memory region
+  start_physical_region =
+      align_up(start_physical_region + meta_size, LLFREE_FRAME_SIZE);
+
+  llfree_info("start_physical_region after alignment: 0x%lx\n",
+              start_physical_region);
+
+  // TODO this iteration isn't pretty
+  frames = align_down((end_physical_region - start_physical_region) >>
+                          LLFREE_FRAME_BITS,
+                      1 << LLFREE_MAX_ORDER);
+  m = llfree_metadata_size(cores, frames);
+
+  llfree_info("Initializing with 0x%lx frames\n", frames);
+  u64 end = start_physical_region + (frames << LLFREE_FRAME_BITS);
+
+  llfree_info(
+      "Memory region manages by llfree:\n  start:0x%lx\n  end:  0x%lx\n",
+      start_physical_region, end);
 
   llfree_meta_t meta = {
       .local = llfree_ext_alloc(LLFREE_CACHE_SIZE, m.local),
@@ -141,10 +169,12 @@ void llfree_setup() {
     llfree = self;
     llfree_info(
         "------------------------- STATUS: HAPPY ------------------------\n");
+    return true;
   } else {
     llfree = NULL;
     llfree_info(
         "------------------------- STATUS: DEAD -------------------------\n");
+    return false;
   }
 }
 
@@ -610,7 +640,13 @@ llfree_result_t llfree_put(llfree_t *self, size_t core, uint64_t frame,
                            llflags_t flags) {
   assert(self != NULL);
   assert(flags.order <= LLFREE_MAX_ORDER);
-  assert(frame < self->lower.frames);
+  // assert(frame < self->lower.frames);
+  if (frame < self->lower.frames) {
+    // TODO
+    // A free request got directed here that should have went to the other
+    // memory region. We ignore if for now
+    return llfree_err(LLFREE_ERR_ADDRESS);
+  }
   assert(!flags.movable);
 
   llfree_result_t res = lower_put(&self->lower, frame, flags.order);

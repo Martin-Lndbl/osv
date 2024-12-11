@@ -646,10 +646,11 @@ llfree_result_t llfree_put(llfree_t *self, size_t core, uint64_t frame,
   assert(self != NULL);
   assert(flags.order <= LLFREE_MAX_ORDER);
   // assert(frame < self->lower.frames);
-  if (frame < self->lower.frames) {
+  if (frame >= self->lower.frames) {
     // TODO
     // A free request got directed here that should have went to the other
     // memory region. We ignore if for now
+    llfree_warn("Page outside range of this allocator\n");
     return llfree_err(LLFREE_ERR_ADDRESS);
   }
   assert(!flags.movable);

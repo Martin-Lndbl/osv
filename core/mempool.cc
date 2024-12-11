@@ -1891,7 +1891,7 @@ static inline void* std_malloc(size_t size, size_t alignment)
                                  ret);
         return ret;
     }
-    printf("0x%lx bytes with 0x%lx alignment cannot be allocated by llfree\n", size, alignment);
+    // printf("0x%lx bytes with 0x%lx alignment cannot be allocated by llfree\n", size, alignment);
 #endif
     if (smp_allocator && size <= memory::pool::max_object_size && alignment <= minimum_size) {
         unsigned n = ilog2_roundup(minimum_size);

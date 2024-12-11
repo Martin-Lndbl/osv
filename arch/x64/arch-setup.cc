@@ -203,7 +203,7 @@ void arch_setup_free_memory()
     // now that we have some free memory, we can start mapping the rest
     mmu::switch_to_runtime_page_tables();
 
-#ifdef DOCUMENT_RESERVATION
+#ifdef VERBOSE
     printf("Distributing Memory between me and OSv:\n");
 #endif
     for_each_e820_entry(e820_buffer, e820_size, [] (e820ent ent) {
@@ -231,7 +231,7 @@ void arch_setup_free_memory()
 
         if (currently_reserved + ent.size < OSV_RESERVE_MEMORY) {
             // Whole e820 region needed to statisfy reserved
-#ifdef DOCUMENT_RESERVATION
+#ifdef VERBOSE
             printf("--------------- e820 ---------------\n");
             printf("    ent_addr: 0x%lx\n", ent.addr);
             printf("    ent_size: 0x%lx\n", ent.size);
@@ -242,7 +242,7 @@ void arch_setup_free_memory()
         } else if (currently_reserved < OSV_RESERVE_MEMORY) {
             // Part of e820 region needed to statisfy reserved
 
-#ifdef DOCUMENT_RESERVATION
+#ifdef VERBOSE
             printf("--------------- e820 ---------------\n");
             printf("    tot_addr: 0x%lx\n", ent.addr);
             printf("    tot_size: 0x%lx\n", ent.size);
@@ -255,7 +255,7 @@ void arch_setup_free_memory()
 
             currently_reserved += needed_for_osv;
 
-#ifdef DOCUMENT_RESERVATION
+#ifdef VERBOSE
             printf("    ent_addr: 0x%lx\n", ent.addr);
             printf("    ent_size: 0x%lx\n", ent.size);
             printf("    llf_addr: 0x%lx\n", start_physical_region);
@@ -274,7 +274,7 @@ void arch_setup_free_memory()
             start_physical_region = ent.addr;
             size_memory_region = ent.size;
 
-#ifdef DOCUMENT_RESERVATION
+#ifdef VERBOSE
             printf("--------------- e820 ---------------\n");
             printf("    ent_addr: None\n");
             printf("    ent_size: None\n");

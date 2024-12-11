@@ -1863,44 +1863,9 @@ void free_initial_memory_range(void* addr, size_t size)
 void  __attribute__((constructor(init_prio::mempool))) setup()
 {
     arch_setup_free_memory();
+#ifdef USE_LLFREE
     llfree_allocator = llfree_setup();
-
-    // if(llfree_allocator){
-    //
-    //   // TODO: remove this line as soon as allocation is fixed
-    //   llfree_allocator = false;
-    //
-    //   auto order = [](size_t s) -> size_t { size_t ret{0};
-    //         size_t ss{(s-1)/PAGE_SIZE}; while(ss > 0){ ss /= 2; ++ret; } return ret;};
-    //
-    //   printf("order(4096)=%d\n", order(4096));
-    //   printf("order(8000)=%d\n", order(8000));
-    //   printf("order(16000)=%d\n", order(16000));
-    //   printf("order(%d)=%d\n", LLFREE_MAX_SIZE, order(LLFREE_MAX_SIZE));
-    //
-    //   uint64_t frame = llfree_alloc(llflags(0), 0);
-    //   printf("phys = 0x%lx\n", frame);
-    //     void *virt = translate_mem_area( mmu::mem_area::main, mmu::mem_area::page,
-    //       reinterpret_cast<void *>(frame));
-    //   printf("virt = 0x%lx\n", virt);
-    //
-    //   uint64_t *pages =  reinterpret_cast<uint64_t *>(virt);
-    //
-    //   for(size_t i = 0; i < 11; i++){
-    //       pages[i] = llfree_alloc(llflags(i), 0);
-    //   }
-    //
-    //   for(size_t i = 0; i < 11; i++){
-    //       llfree_free(pages[i], 0);
-    //   }
-    //
-    //   void *to_free = translate_mem_area( mmu::mem_area::page, mmu::mem_area::main, virt);
-    //   printf("phys = 0x%lx\n", to_free);
-    //
-    //   if(!llfree_free(reinterpret_cast<uint64_t>(to_free), 0))
-    //     printf("Freeing page 0x%lx failed\n", to_free);
-    // }
-
+#endif
 }
 
 }

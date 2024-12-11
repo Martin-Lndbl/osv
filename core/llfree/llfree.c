@@ -153,11 +153,10 @@ bool llfree_setup() {
   m = llfree_metadata_size(cores, frames);
 
   llfree_info("Initializing with 0x%lx frames\n", frames);
-  u64 end = start_physical_region + (frames << LLFREE_FRAME_BITS);
 
   llfree_info(
       "Memory region manages by llfree:\n  start:0x%lx\n  end:  0x%lx\n",
-      start_physical_region, end);
+      start_physical_region,  start_physical_region + (frames << LLFREE_FRAME_BITS));
 
   llfree_meta_t meta = {
       .local = llfree_ext_alloc(LLFREE_CACHE_SIZE, m.local),

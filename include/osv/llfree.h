@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <sys/cdefs.h>
 
+#define USE_LLFREE
+
 /// Unused functions and variables
 #define ll_unused __attribute__((unused))
 

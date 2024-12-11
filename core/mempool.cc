@@ -1784,9 +1784,13 @@ extern "C" {
 static inline void untracked_free_page(void *v)
 {
     trace_memory_page_free(v);
-    if(llfree_allocator)
+#ifdef USE_LLFREE
+    if(llfree_allocator){
         llfree_free(reinterpret_cast<uint64_t>(v), 0);
-    else if (!smp_allocator)
+        return;
+    }
+#endif
+    if (!smp_allocator)
         early_free_page(v);
     else
         page_pool::l1::free_page(v);
@@ -1913,15 +1917,18 @@ static inline void* std_malloc(size_t size, size_t alignment)
         return libc_error_ptr<void *>(ENOMEM);
     void *ret;
     size_t minimum_size = std::max(size, memory::pool::min_object_size);
+#ifdef USE_LLFREE
     if(llfree_allocator && size < LLFREE_MAX_SIZE && alignment <= PAGE_SIZE){
-        // printf("requested 0x%lx bytes \n", size);
         auto order = [size]() -> size_t { size_t ret{0};
               size_t s{(size-1)/PAGE_SIZE}; while(s > 0 && ret < 10){ s /= 2; ++ret; } return ret;};
         ret = reinterpret_cast<void *>(memory::llfree_alloc(llflags(order()), 0));
         ret = translate_mem_area(mmu::mem_area::main, mmu::mem_area::page,
                                  ret);
-        // printf("serving virtual page: 0x%lx\n", ret);
-    } else if (smp_allocator && size <= memory::pool::max_object_size && alignment <= minimum_size) {
+        return ret;
+    }
+    printf("0x%lx bytes with 0x%lx alignment cannot be allocated by llfree\n", size, alignment);
+#endif
+    if (smp_allocator && size <= memory::pool::max_object_size && alignment <= minimum_size) {
         unsigned n = ilog2_roundup(minimum_size);
         ret = memory::malloc_pools[n].alloc();
         ret = translate_mem_area(mmu::mem_area::main, mmu::mem_area::mempool,

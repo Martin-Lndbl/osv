@@ -104,6 +104,12 @@ uint64_t llfree_alloc(llflags_t flags, size_t core) {
 bool llfree_free(uint64_t physaddr, size_t core) {
   if (llfree) {
     size_t idx = (physaddr - start_physical_region) >> LLFREE_FRAME_BITS;
+
+    // TODO: Delete this guard after early page allocations are directed to the
+    // right place by the caller
+    if (idx >= llfree->lower.frames) {
+      return 0;
+    }
     // llfree_info("freeing phys page at 0x%lx\n", physaddr);
     // llfree_info("freeing frame index  0x%lx\n", idx);
     return llfree_is_ok(llfree_put(llfree, core, idx, llflags(0)));

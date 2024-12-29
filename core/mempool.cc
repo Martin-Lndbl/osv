@@ -33,7 +33,6 @@
 #include <algorithm>
 #include <osv/prio.hh>
 #include <stdlib.h>
-#include <osv/shrinker.h>
 #include <osv/defer.hh>
 #include <osv/dbg-alloc.hh>
 #include <osv/export.h>
@@ -67,7 +66,6 @@ TRACEPOINT(trace_memory_realloc, "in=%p, newlen=%d, out=%p", void *, size_t, voi
 TRACEPOINT(trace_memory_page_alloc, "page=%p", void*);
 TRACEPOINT(trace_memory_page_free, "page=%p", void*);
 TRACEPOINT(trace_memory_huge_failure, "page ranges=%d", unsigned long);
-TRACEPOINT(trace_memory_reclaim, "shrinker %s, target=%d, delta=%d", const char *, long, long);
 TRACEPOINT(trace_memory_wait, "allocation size=%d", size_t);
 
 namespace dbg {
@@ -75,9 +73,6 @@ namespace dbg {
 static size_t object_size(void* v);
 
 }
-
-OSV_LIBSOLARIS_API
-unsigned char *osv_reclaimer_thread;
 
 namespace memory {
 
@@ -473,7 +468,6 @@ mutex free_page_ranges_lock;
 // and eventually hotplug in an hypothetical future
 static std::atomic<size_t> total_memory(0);
 static std::atomic<size_t> free_memory(0);
-static size_t watermark_lo(0);
 #if CONF_memory_jvm_balloon
 static std::atomic<size_t> current_jvm_heap_memory(0);
 #endif
@@ -483,30 +477,9 @@ static size_t constexpr min_emergency_pool_size = 4 << 20;
 
 __thread unsigned emergency_alloc_level = 0;
 
-reclaimer_lock_type reclaimer_lock;
-
-extern "C" OSV_LIBSOLARIS_API void thread_mark_emergency()
-{
-    emergency_alloc_level = 1;
-}
-
-reclaimer reclaimer_thread
-    __attribute__((init_priority((int)init_prio::reclaimer)));
-
-void wake_reclaimer()
-{
-    reclaimer_thread.wake();
-}
-
 namespace stats {
     size_t free() { return free_memory.load(std::memory_order_relaxed); }
     size_t total() { return total_memory.load(std::memory_order_relaxed); }
-
-    size_t max_no_reclaim()
-    {
-        auto total = total_memory.load(std::memory_order_relaxed);
-        return total - watermark_lo;
-    }
 #if CONF_memory_jvm_balloon
     void on_jvm_heap_alloc(size_t mem)
     {
@@ -521,255 +494,11 @@ namespace stats {
 #endif
 }
 
-void reclaimer::wake()
-{
-    _blocked.wake_one();
-}
-
-pressure reclaimer::pressure_level()
-{
-    assert(mutex_owned(&free_page_ranges_lock));
-    if (stats::free() < watermark_lo) {
-        return pressure::PRESSURE;
-    }
-    return pressure::NORMAL;
-}
-
-ssize_t reclaimer::bytes_until_normal(pressure curr)
-{
-    assert(mutex_owned(&free_page_ranges_lock));
-    if (curr == pressure::PRESSURE) {
-        return watermark_lo - stats::free();
-    } else {
-        return 0;
-    }
-}
-
 void oom()
 {
     abort("Out of memory: could not reclaim any further. Current memory: %d Kb", stats::free() >> 10);
 }
 
-void reclaimer::wait_for_minimum_memory()
-{
-    if (emergency_alloc_level) {
-        return;
-    }
-
-    if (stats::free() < min_emergency_pool_size) {
-        // Nothing could possibly give us memory back, might as well use up
-        // everything in the hopes that we only need a tiny bit more..
-        if (!_active_shrinkers) {
-            return;
-        }
-        wait_for_memory(min_emergency_pool_size - stats::free());
-    }
-}
-
-// Allocating memory here can lead to a stack overflow. That is why we need
-// to use boost::intrusive for the waiting lists.
-//
-// Also, if the reclaimer itself reaches a point in which it needs to wait for
-// memory, there is very little hope and we would might as well give up.
-void reclaimer::wait_for_memory(size_t mem)
-{
-    // If we're asked for an impossibly large allocation, abort now instead of
-    // the reclaimer thread aborting later. By aborting here, the application
-    // bug will be easier for the user to debug. An allocation larger than RAM
-    // can never be satisfied, because OSv doesn't do swapping.
-    if (mem > memory::stats::total())
-        abort("Unreasonable allocation attempt, larger than memory. Aborting.");
-    trace_memory_wait(mem);
-    _oom_blocked.wait(mem);
-}
-
-
-void shrinker::deactivate_shrinker()
-{
-    reclaimer_thread._active_shrinkers -= _enabled;
-    _enabled = 0;
-}
-
-void shrinker::activate_shrinker()
-{
-    reclaimer_thread._active_shrinkers += !_enabled;
-    _enabled = 1;
-}
-
-shrinker::shrinker(std::string name)
-    : _name(name)
-{
-    // Since we already have to take that lock anyway in pretty much every
-    // operation, just reuse it.
-    WITH_LOCK(reclaimer_thread._shrinkers_mutex) {
-        reclaimer_thread._shrinkers.push_back(this);
-        reclaimer_thread._active_shrinkers += 1;
-    }
-}
-
-extern "C"
-void *osv_register_shrinker(const char *name,
-                            size_t (*func)(size_t target, bool hard))
-{
-    return reinterpret_cast<void *>(new c_shrinker(name, func));
-}
-
-bool reclaimer_waiters::wake_waiters()
-{
-    // bool woken = false;
-    // assert(mutex_owned(&free_page_ranges_lock));
-    // free_page_ranges.for_each([&] (page_range& fp) {
-    //     // We won't do the allocations, so simulate. Otherwise we can have
-    //     // 10Mb available in the whole system, and 4 threads that wait for
-    //     // it waking because they all believe that memory is available
-    //     auto in_this_page_range = fp.size;
-    //     // We expect less waiters than page ranges so the inner loop is one
-    //     // of waiters. But we cut the whole thing short if we're out of them.
-    //     if (_waiters.empty()) {
-    //         woken = true;
-    //         return false;
-    //     }
-    //
-    //     auto it = _waiters.begin();
-    //     while (it != _waiters.end()) {
-    //         auto& wr = *it;
-    //         it++;
-    //
-    //         if (in_this_page_range >= wr.bytes) {
-    //             in_this_page_range -= wr.bytes;
-    //             _waiters.erase(_waiters.iterator_to(wr));
-    //             wr.owner->wake();
-    //             wr.owner = nullptr;
-    //             woken = true;
-    //         }
-    //     }
-    //     return true;
-    // });
-    //
-    // if (!_waiters.empty()) {
-    //     reclaimer_thread.wake();
-    // }
-    // return woken;
-    return true;
-}
-
-// Note for callers: Ideally, we would not only wake, but already allocate
-// memory here and pass it back to the waiter. However, memory is not always
-// allocated the same way (ex: refill_page_buffer is completely different from
-// malloc_large) and that could be cumbersome.
-//
-// That means that this returning will only mean allocation may succeed, not
-// that it will.  Because of that, it is of extreme importance that callers
-// pass the exact amount of memory they are waiting for. So for instance, if
-// your allocation is 2Mb in size + a 4k header, "bytes" below should be 2Mb +
-// 4k, not 2Mb. Failing to do so could livelock the system, that would forever
-// wake up believing there is enough memory, when in reality there is not.
-void reclaimer_waiters::wait(size_t bytes)
-{
-    assert(mutex_owned(&free_page_ranges_lock));
-
-    sched::thread *curr = sched::thread::current();
-
-    // Wait for whom?
-    if (curr == reclaimer_thread._thread.get()) {
-        oom();
-     }
-
-    wait_node wr;
-    wr.owner = curr;
-    wr.bytes = bytes;
-    _waiters.push_back(wr);
-
-    // At this point the reclaimer thread already knows there are waiters,
-    // because the _waiters_list was already updated.
-    reclaimer_thread.wake();
-    sched::thread::wait_until(&free_page_ranges_lock, [&] { return !wr.owner; });
-}
-
-reclaimer::reclaimer()
-    : _oom_blocked(), _thread(sched::thread::make([&] { _do_reclaim(); }, sched::thread::attr().detached().name("reclaimer").stack(mmu::page_size)))
-{
-    osv_reclaimer_thread = reinterpret_cast<unsigned char *>(_thread.get());
-    _thread->start();
-}
-
-bool reclaimer::_can_shrink()
-{
-    auto p = pressure_level();
-    // The active fields are protected by the _shrinkers_mutex lock, but there
-    // is no need to take it. Worst that can happen is that we either defer
-    // this pass, or take an extra pass without need for it.
-    if (p == pressure::PRESSURE) {
-        return _active_shrinkers != 0;
-    }
-    return false;
-}
-
-void reclaimer::_shrinker_loop(size_t target, std::function<bool ()> hard)
-{
-    // FIXME: This simple loop works only because we have a single shrinker
-    // When we have more, we need to probe them and decide how much to take from
-    // each of them.
-    WITH_LOCK(_shrinkers_mutex) {
-        // We execute this outside the free_page_ranges lock, so the threads
-        // freeing memory (or allocating, for that matter) will have the chance
-        // to manipulate the free_page_ranges structure.  Executing the
-        // shrinkers with the lock held would result in a deadlock.
-        for (auto s : _shrinkers) {
-            // FIXME: If needed, in the future we can introduce another
-            // intermediate threshold that will put is into hard mode even
-            // before we have waiters.
-            size_t freed = s->request_memory(target, hard());
-            trace_memory_reclaim(s->name().c_str(), target, freed);
-        }
-    }
-}
-
-void reclaimer::_do_reclaim()
-{
-    ssize_t target;
-    emergency_alloc_level = 1;
-
-    while (true) {
-        WITH_LOCK(free_page_ranges_lock) {
-            _blocked.wait(free_page_ranges_lock);
-            target = bytes_until_normal();
-        }
-
-#if CONF_memory_jvm_balloon
-        // This means that we are currently ballooning, we should
-        // try to serve the waiters from temporary memory without
-        // going on hard mode. A big batch of more memory is likely
-        // in its way.
-        if (_oom_blocked.has_waiters() && throttling_needed()) {
-            _shrinker_loop(target, [] { return false; });
-            WITH_LOCK(free_page_ranges_lock) {
-                if (_oom_blocked.wake_waiters()) {
-                        continue;
-                }
-            }
-        }
-#endif
-
-        _shrinker_loop(target, [this] { return _oom_blocked.has_waiters(); });
-
-        WITH_LOCK(free_page_ranges_lock) {
-            if (target >= 0) {
-                // Wake up all waiters that are waiting and now have a chance to succeed.
-                // If we could not wake any, there is nothing really we can do.
-                if (!_oom_blocked.wake_waiters()) {
-                    oom();
-                }
-            }
-
-#if CONF_memory_jvm_balloon
-            if (balloon_api) {
-                balloon_api->voluntary_return();
-            }
-#endif
-        }
-    }
-}
 static size_t large_object_offset(void *&obj)
 {
     void *original_obj = obj;
@@ -1491,33 +1220,27 @@ void* malloc(size_t size, size_t alignment)
     recursed = true;
     auto unrecurse = defer([&] { recursed = false; });
 
-    WITH_LOCK(memory::free_page_ranges_lock) {
-        memory::reclaimer_thread.wait_for_minimum_memory();
-    }
-
     // There will be multiple allocations needed to satisfy this allocation; request
     // access to the emergency pool to avoid us holding some lock and then waiting
     // in an internal allocation
-    WITH_LOCK(memory::reclaimer_lock) {
-        auto asize = align_up(size, mmu::page_size);
-        auto padded_size = pad_before + asize + pad_after;
-        if (alignment > mmu::page_size) {
-            // Our allocations are page-aligned - might need more
-            padded_size += alignment - mmu::page_size;
-        }
-        char* v = free_area.fetch_add(padded_size, std::memory_order_relaxed);
-        // change v so that (v + pad_before) is aligned.
-        v += align_up(v + pad_before, alignment) - (v + pad_before);
-        mmu::vpopulate(v, mmu::page_size);
-        new (v) header(size);
-        v += pad_before;
-        mmu::vpopulate(v, asize);
-        memset(v + size, '$', asize - size);
-        // fill the memory with garbage, to catch use-before-init
-        uint8_t garbage = 3;
-        std::generate_n(v, size, [&] { return garbage++; });
-        return v;
+    auto asize = align_up(size, mmu::page_size);
+    auto padded_size = pad_before + asize + pad_after;
+    if (alignment > mmu::page_size) {
+        // Our allocations are page-aligned - might need more
+        padded_size += alignment - mmu::page_size;
     }
+    char* v = free_area.fetch_add(padded_size, std::memory_order_relaxed);
+    // change v so that (v + pad_before) is aligned.
+    v += align_up(v + pad_before, alignment) - (v + pad_before);
+    mmu::vpopulate(v, mmu::page_size);
+    new (v) header(size);
+    v += pad_before;
+    mmu::vpopulate(v, asize);
+    memset(v + size, '$', asize - size);
+    // fill the memory with garbage, to catch use-before-init
+    uint8_t garbage = 3;
+    std::generate_n(v, size, [&] { return garbage++; });
+    return v;
 }
 
 void free(void* v)
@@ -1526,17 +1249,15 @@ void free(void* v)
     assert(!recursed);
     recursed = true;
     auto unrecurse = defer([&] { recursed = false; });
-    WITH_LOCK(memory::reclaimer_lock) {
-        auto h = static_cast<header*>(v - pad_before);
-        auto size = h->size;
-        auto asize = align_up(size, mmu::page_size);
-        char* vv = reinterpret_cast<char*>(v);
-        assert(std::all_of(vv + size, vv + asize, [=](char c) { return c == '$'; }));
-        h->~header();
-        mmu::vdepopulate(h, mmu::page_size);
-        mmu::vdepopulate(v, asize);
-        mmu::vcleanup(h, pad_before + asize);
-    }
+    auto h = static_cast<header*>(v - pad_before);
+    auto size = h->size;
+    auto asize = align_up(size, mmu::page_size);
+    char* vv = reinterpret_cast<char*>(v);
+    assert(std::all_of(vv + size, vv + asize, [=](char c) { return c == '$'; }));
+    h->~header();
+    mmu::vdepopulate(h, mmu::page_size);
+    mmu::vdepopulate(v, asize);
+    mmu::vcleanup(h, pad_before + asize);
 }
 
 static inline size_t object_size(void* v)

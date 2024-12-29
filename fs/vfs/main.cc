@@ -86,7 +86,6 @@
 #include <chrono>
 
 #include "drivers/zfs.hh"
-#include "bsd/porting/shrinker.h"
 
 using namespace std;
 
@@ -2612,10 +2611,6 @@ static void mount_fs(mntent *m)
     auto ret = sys_mount(m->mnt_fsname, m->mnt_dir, m->mnt_type, 0, (void*)m->mnt_opts);
     if (ret) {
         printf("failed to mount %s, error = %s\n", m->mnt_type, strerror(ret));
-    } else {
-        if (zfs) {
-            bsd_shrinker_init();
-        }
     }
 }
 

@@ -1076,16 +1076,15 @@ static void* mapped_malloc_large(size_t size, size_t offset)
 
 static void* malloc_large(size_t size, size_t alignment, bool block = true, bool contiguous = true)
 {
-    // handle in contiguous physical memory if possible
-    if(llf::order(size, alignment) <= 10){
-        if(page_allocator.is_ready()){
-            return page_allocator.alloc_page(size, alignment);
-        } else {
-            return llfree_extern_alloc(size, alignment);
-        }
-    }
-
     if(contiguous){
+        if(llf::order(size, alignment) <= 10){
+            if(page_allocator.is_ready()){
+                return page_allocator.alloc_page(size, alignment);
+            } else {
+                return llfree_extern_alloc(size, alignment);
+            }
+        }
+
         printf("[ERROR]: physically contiguous allocations above 4MiB are not possible\n");
         abort();
     }
@@ -1336,10 +1335,6 @@ static inline void* std_malloc(size_t size, size_t alignment)
     } else if (!memory::smp_allocator && memory::will_fit_in_early_alloc_page(size,alignment)) {
         ret = memory::early_alloc_object(size, alignment);
         ret = translate_mem_area(mmu::mem_area::main, mmu::mem_area::mempool, ret);
-    } else if (minimum_size <= mmu::page_size && alignment <= mmu::page_size) {
-        ret = mmu::translate_mem_area(mmu::mem_area::main, mmu::mem_area::page, memory::alloc_page());
-        trace_memory_malloc_page(ret, size, mmu::page_size, alignment);
-    // TODO refine this else if to support allocations of higher alignments if llf_max_size is small enough
     } else {
         ret = memory::malloc_large(minimum_size, alignment, true, false);
         trace_memory_malloc_page(ret, size, mmu::page_size, alignment);

@@ -609,7 +609,6 @@ bsd += bsd/porting/networking.o
 endif
 bsd += bsd/porting/netport.o
 bsd += bsd/porting/netport1.o
-bsd += bsd/porting/shrinker.o
 bsd += bsd/porting/cpu.o
 bsd += bsd/porting/uma_stub.o
 bsd += bsd/porting/sync_stub.o

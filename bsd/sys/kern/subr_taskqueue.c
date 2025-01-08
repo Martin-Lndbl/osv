@@ -459,8 +459,6 @@ taskqueue_thread_loop(void *arg)
 {
 	struct taskqueue **tqp, *tq;
 
-	thread_mark_emergency();
-
 	tqp = arg;
 	tq = *tqp;
 	TQ_LOCK(tq);

@@ -35,7 +35,6 @@
 #include <osv/rcu.hh>
 #include <osv/mempool.hh>
 #include <bsd/porting/networking.hh>
-#include <bsd/porting/shrinker.h>
 #include <bsd/porting/route.h>
 #include <osv/dhcp.hh>
 #include <osv/version.h>
@@ -492,7 +491,6 @@ static void load_zfs_library_and_mount_zfs_root(const char* mount_error_msg, boo
                 pivot_rootfs("/");
             }
         } else {
-            bsd_shrinker_init();
             boot_time.event("ZFS mounted");
         }
     });
@@ -769,8 +767,6 @@ void main_cont(int loader_argc, char** loader_argv)
     while (end > osv::clock::uptime::now()) {
         // spin
     }
-
-    memory::enable_debug_allocator();
 
 #ifdef __x86_64__
 #if CONF_drivers_acpi

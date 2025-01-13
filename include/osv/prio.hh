@@ -27,6 +27,7 @@ enum {
     psci,
     acpi,
     vma_list,
+    virt_segment_array,
     reclaimer,
     sched,
     clock,

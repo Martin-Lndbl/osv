@@ -77,41 +77,22 @@ __attribute__((init_priority((int)init_prio::linear_vma_set)))
 std::set<linear_vma*, linear_vma_compare> linear_vma_set;
 rwlock_t linear_vma_set_mutex;
 
-namespace bi = boost::intrusive;
-
-class vma_compare {
-public:
-    bool operator ()(const vma& a, const vma& b) const {
-        return a.addr() < b.addr();
-    }
-};
-
 constexpr uintptr_t lower_vma_limit = 0x0;
 constexpr uintptr_t upper_vma_limit = 0x400000000000;
 
-typedef boost::intrusive::set<vma,
-                              bi::compare<vma_compare>,
-                              bi::member_hook<vma,
-                                              bi::set_member_hook<>,
-                                              &vma::_vma_list_hook>,
-                              bi::optimize_size<true>
-                              > vma_list_base;
+vma_list_type::vma_list_type() {
+    // insert markers for the edges of allocatable area
+    // simplifies searches
+    auto lower_edge = new anon_vma(addr_range(lower_vma_limit, lower_vma_limit), 0, 0);
+    insert(*lower_edge);
+    auto upper_edge = new anon_vma(addr_range(upper_vma_limit, upper_vma_limit), 0, 0);
+    insert(*upper_edge);
 
-struct vma_list_type : vma_list_base {
-    vma_list_type() {
-        // insert markers for the edges of allocatable area
-        // simplifies searches
-        auto lower_edge = new anon_vma(addr_range(lower_vma_limit, lower_vma_limit), 0, 0);
-        insert(*lower_edge);
-        auto upper_edge = new anon_vma(addr_range(upper_vma_limit, upper_vma_limit), 0, 0);
-        insert(*upper_edge);
-
-        WITH_LOCK(vma_range_set_mutex.for_write()) {
-            vma_range_set.insert(vma_range(lower_edge));
-            vma_range_set.insert(vma_range(upper_edge));
-        }
+    WITH_LOCK(vma_range_set_mutex.for_write()) {
+        vma_range_set.insert(vma_range(lower_edge));
+        vma_range_set.insert(vma_range(upper_edge));
     }
-};
+}
 
 __attribute__((init_priority((int)init_prio::vma_list)))
 vma_list_type vma_list;
@@ -1218,6 +1199,105 @@ uintptr_t allocate(vma *v, uintptr_t start, size_t size, bool search)
     }
 
     return start;
+}
+
+// Array of all virtual memory segments available
+__attribute__((init_priority((int)init_prio::virt_segment_array)))
+std::array<std::atomic_uint8_t, segments_len> virt_segments;
+
+// One allocator for each CPU, but globally accessible.
+__attribute__((init_priority((int)init_prio::virt_segment_array)))
+std::array<segment_allocator, 64> segment_allocators;
+
+// Release n segments starting from start
+void release_segments(unsigned start, unsigned n, uint8_t cpu_id){
+  for(unsigned i{start}; i < start +n; ++i){
+      virt_segments[i].compare_exchange_weak(cpu_id, 255, std::memory_order_acq_rel);
+  }
+}
+
+// Acquire n segments in a linear fashion
+unsigned acquire_segments(unsigned n, uint8_t cpu_id){
+    // Indicator a virtual memory segment is free
+    uint8_t free_idx{255};
+
+    unsigned k{0};
+    for(unsigned i{0}; i < segments_len; ++i){
+        if(virt_segments[i].load() != free_idx)
+            k = 0;
+        else if(++k == n) {
+            // We found n free segments in a row. Now lets see if we can reserve them before someone else does
+            for(unsigned j{i-n}; j < i; ++j){
+                if(!virt_segments[j].compare_exchange_weak(free_idx, cpu_id, std::memory_order_acq_rel)){
+                    // Someone else was faster, we have to start over
+                    release_segments(i-n, j-i-n, cpu_id);
+                    return acquire_segments(n, cpu_id);
+                }
+            }
+            return i-n;
+        }
+    }
+    // TODO: What happens if no segment is available?
+    assert(false);
+    return 0;
+}
+
+vma_list_type::iterator
+segment_allocator::find_intersecting_vma(uintptr_t addr) {
+    auto vma = vmas.lower_bound(addr, addr_compare());
+    if (vma->start() == addr) {
+        return vma;
+    }
+    --vma;
+    if (addr >= vma->start() && addr < vma->end()) {
+        return vma;
+    } else {
+        return vmas.end();
+    }
+}
+
+void segment_allocator::allocate(vma& v, unsigned long size, unsigned perm, unsigned flags) {
+    assert(size % page_size == 0);
+
+    SCOPE_LOCK(rwlock.for_write());
+    // Everything bigger segment_size / 2 gets its own segment
+    if(size < segment_size / 2){
+        for(auto segment : segments){
+            if(segment_size - segment.offset >= size){
+                unsigned long start = segment.index * segment_size + segment.offset;
+                segment.offset += size;
+
+                v.set(start, start + size);
+                vmas.insert(v);
+                page_cache.insert(v); // TODO
+                return;
+            }
+        }
+        // No fitting hole was found
+        segments.push_front(virt_segment(acquire_segments(1, cpu_id)));
+
+        // Retry with new segment
+        return this->allocate(v, size, perm, flags);
+
+    }
+    unsigned needed_segments = (size - 1) / segment_size + 1;
+
+    unsigned start = acquire_segments(needed_segments, cpu_id);
+
+    for(unsigned i{0}; i < needed_segments; ++i){
+        segments.push_back(virt_segment(start + i, segment_size, 0));
+    }
+
+    v.set(start, start+size);
+    vmas.insert(v);
+    page_cache.insert(v); // TODO
+}
+
+bool segment_allocator::free(uintptr_t addr){
+  SCOPE_LOCK(rwlock.for_write());
+  // auto v = this->find_intersecting_vma(addr);
+
+  return false;
 }
 
 inline bool in_vma_range(void* addr)

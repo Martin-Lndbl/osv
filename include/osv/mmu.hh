@@ -9,6 +9,7 @@
 #define MMU_HH
 
 #include "fs/fs.hh"
+#include "osv/rwlock.h"
 #include <stdint.h>
 #include <boost/intrusive/set.hpp>
 #include <osv/types.h>
@@ -185,6 +186,58 @@ private:
     uintptr_t _real_size;
 };
 #endif
+
+class vma_compare {
+public:
+    bool operator ()(const vma& a, const vma& b) const {
+        return a.addr() < b.addr();
+    }
+};
+
+typedef boost::intrusive::set<vma,
+                              bi::compare<vma_compare>,
+                              bi::member_hook<vma,
+                                              bi::set_member_hook<>,
+                                              &vma::_vma_list_hook>,
+                              bi::optimize_size<true>
+                              > vma_list_base;
+
+struct vma_list_type : vma_list_base {
+    vma_list_type();
+};
+
+struct virt_segment {
+    unsigned long index;
+    unsigned long offset{0};
+    unsigned long freed_bytes{0};
+
+    virt_segment(unsigned long index) : index(index){}
+    virt_segment(unsigned long index, unsigned long offset, unsigned long freed_bytes) :
+      index(index), offset(offset), freed_bytes(freed_bytes){}
+};
+
+struct segment_allocator {
+  private:
+    std::list<virt_segment> segments;
+    vma_list_type vmas;
+    vma_list_type page_cache;
+    rwlock_t rwlock;
+    uint8_t cpu_id;
+
+    vma_list_type::iterator find_intersecting_vma(uintptr_t addr);
+
+    bool get_segments(unsigned n);
+  public:
+    // Allocates a virtual memory region of the given size.
+    void allocate(vma& v, unsigned long size, unsigned perm, unsigned flags);
+
+    // Frees a virtual memory region if one exists at the given address.
+    // Also frees physical memory is exists.
+    bool free(uintptr_t addr);
+
+    // Returns a reference to the corresponding vma.
+    vma& get(uintptr_t addr);
+};
 
 class shm_file final : public special_file {
     size_t _size;

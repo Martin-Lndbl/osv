@@ -43,6 +43,8 @@ extern size_t elf_size;
 
 extern const char text_start[], text_end[];
 
+// #define SEGMENT_ALLOCATION
+
 namespace mmu {
 
 #if CONF_lazy_stack
@@ -61,6 +63,22 @@ struct vma_range_compare {
         return a.start() < b.start();
     }
 };
+
+// Array of all virtual memory segments available
+__attribute__((init_priority((int)init_prio::virt_segment_array)))
+std::array<std::atomic_uint8_t, segments_len> virt_segments;
+
+void __attribute__((constructor(init_prio::virt_segment_array))) setup(){
+  for(unsigned i{0}; i < segments_len; ++i){
+      virt_segments[i].store(255, std::memory_order_relaxed);
+  }
+}
+
+// One allocator for each CPU, but globally accessible.
+__attribute__((init_priority((int)init_prio::virt_segment_array)))
+std::array<segment_allocator, 64> segment_allocators; // TODO consider other datastructure
+
+
 
 //Set of all vma ranges - both linear and non-linear ones
 __attribute__((init_priority((int)init_prio::vma_range_set)))
@@ -1062,9 +1080,22 @@ ulong evacuate(uintptr_t start, uintptr_t end)
 
 static void unmap(const void* addr, size_t size)
 {
+#ifndef SEGMENT_ALLOCATION
     size = align_up(size, mmu::page_size);
     auto start = reinterpret_cast<uintptr_t>(addr);
     evacuate(start, start+size);
+#else
+    uintptr_t virt = reinterpret_cast<uintptr_t>(addr);
+    unsigned segment = virt_to_segment_index(virt);
+    uint8_t cpuid = virt_segments[segment].load(std::memory_order_relaxed);
+    // printf("a: 0x%lx ", virt);
+    // printf("s: %d ", segment);
+    // printf("c: %d\n", cpuid);
+    assert(cpuid < 64);
+
+    segment_allocators[cpuid].evacuate(virt);
+
+#endif
 }
 
 static error sync(const void* addr, size_t length, int flags)
@@ -1181,6 +1212,7 @@ public:
 
 uintptr_t allocate(vma *v, uintptr_t start, size_t size, bool search)
 {
+#ifndef SEGMENT_ALLOCATION
     if (search) {
         // search for unallocated hole around start
         if (!start) {
@@ -1199,15 +1231,24 @@ uintptr_t allocate(vma *v, uintptr_t start, size_t size, bool search)
     }
 
     return start;
+#else
+    const uint8_t allocator_index = 0; // TODO
+    const unsigned segment_index = virt_to_segment_index(start);
+
+    for(;;){
+        if(!search)
+            return segment_allocators[allocator_index].allocate(v, size);
+
+        uint8_t allocated_index = virt_segments[segment_index].load(std::memory_order_relaxed);
+
+        if(allocated_index != 255)
+            return segment_allocators[allocated_index].allocate_at(v, start, size);
+
+        if(virt_segments[segment_index].compare_exchange_weak(allocated_index, allocator_index, std::memory_order_acq_rel))
+            return segment_allocators[allocator_index].allocate_at(v, start, size);
+    }
+#endif
 }
-
-// Array of all virtual memory segments available
-__attribute__((init_priority((int)init_prio::virt_segment_array)))
-std::array<std::atomic_uint8_t, segments_len> virt_segments;
-
-// One allocator for each CPU, but globally accessible.
-__attribute__((init_priority((int)init_prio::virt_segment_array)))
-std::array<segment_allocator, 64> segment_allocators;
 
 // Release n segments starting from start
 void release_segments(unsigned start, unsigned n, uint8_t cpu_id){
@@ -1227,14 +1268,14 @@ unsigned acquire_segments(unsigned n, uint8_t cpu_id){
             k = 0;
         else if(++k == n) {
             // We found n free segments in a row. Now lets see if we can reserve them before someone else does
-            for(unsigned j{i-n}; j < i; ++j){
+            for(unsigned j{i-n+1}; j <= i; ++j){
                 if(!virt_segments[j].compare_exchange_weak(free_idx, cpu_id, std::memory_order_acq_rel)){
                     // Someone else was faster, we have to start over
                     release_segments(i-n, j-i-n, cpu_id);
                     return acquire_segments(n, cpu_id);
-                }
+                } else break;
             }
-            return i-n;
+            return i-n+1;
         }
     }
     // TODO: What happens if no segment is available?
@@ -1242,7 +1283,7 @@ unsigned acquire_segments(unsigned n, uint8_t cpu_id){
     return 0;
 }
 
-vma_list_type::iterator
+vma_list_t::iterator
 segment_allocator::find_intersecting_vma(uintptr_t addr) {
     auto vma = vmas.lower_bound(addr, addr_compare());
     if (vma->start() == addr) {
@@ -1256,29 +1297,53 @@ segment_allocator::find_intersecting_vma(uintptr_t addr) {
     }
 }
 
-void segment_allocator::allocate(vma& v, unsigned long size, unsigned perm, unsigned flags) {
+std::pair<vma_list_t::iterator, vma_list_t::iterator>
+segment_allocator::find_intersecting_vmas(const addr_range& r)
+{
+    if (r.end() <= r.start()) { // empty range, so nothing matches
+        return {vmas.end(), vmas.end()};
+    }
+    auto start = vmas.lower_bound(r.start(), addr_compare());
+    if (start->start() > r.start()) {
+        // The previous vma might also intersect with our range if it ends
+        // after our range's start.
+        auto prev = std::prev(start);
+        if (prev->end() > r.start()) {
+            start = prev;
+        }
+    }
+    // If the start vma is actually beyond the end of the search range,
+    // there is no intersection.
+    if (start->start() >= r.end()) {
+        return {vmas.end(), vmas.end()};
+    }
+    // end is the first vma starting >= r.end(), so any previous vma (after
+    // start) surely started < r.end() so is part of the intersection.
+    auto end = vmas.lower_bound(r.end(), addr_compare());
+    return {start, end};
+}
+
+uintptr_t segment_allocator::allocate(vma *v, unsigned long size) {
     assert(size % page_size == 0);
 
     SCOPE_LOCK(rwlock.for_write());
-    // Everything bigger segment_size / 2 gets its own segment
-    if(size < segment_size / 2){
-        for(auto segment : segments){
+    // Everything bigger segment_size / 2 gets its own segment.
+    // Otherwise loop until /allocation succeeds
+    while(size <= segment_size){
+        for(auto& segment : segments){
             if(segment_size - segment.offset >= size){
-                unsigned long start = segment.index * segment_size + segment.offset;
+                unsigned long start = segment_area_base + segment.index * segment_size + segment.offset;
                 segment.offset += size;
 
-                v.set(start, start + size);
-                vmas.insert(v);
-                page_cache.insert(v); // TODO
-                return;
+                v->set(start, start + size);
+                vmas.insert(*v);
+                // page_cache.insert(*v); // TODO
+                                      
+                return start;
             }
         }
         // No fitting hole was found
         segments.push_front(virt_segment(acquire_segments(1, cpu_id)));
-
-        // Retry with new segment
-        return this->allocate(v, size, perm, flags);
-
     }
     unsigned needed_segments = (size - 1) / segment_size + 1;
 
@@ -1288,16 +1353,101 @@ void segment_allocator::allocate(vma& v, unsigned long size, unsigned perm, unsi
         segments.push_back(virt_segment(start + i, segment_size, 0));
     }
 
-    v.set(start, start+size);
-    vmas.insert(v);
-    page_cache.insert(v); // TODO
+    v->set(start, start+size);
+    vmas.insert(*v);
+    // page_cache.insert(*v); // TODO
+    return start;
 }
 
-bool segment_allocator::free(uintptr_t addr){
-  SCOPE_LOCK(rwlock.for_write());
-  // auto v = this->find_intersecting_vma(addr);
+uintptr_t segment_allocator::allocate_at(vma *v, uintptr_t start, unsigned long size){
 
-  return false;
+    auto cur = this->find_intersecting_vmas(addr_range(start, start +size));
+
+    // Check if the mapping is free.
+    // If it isn't just allocate it somewhere else
+    // TODO OSv was doing it differntly so far. Figure out why
+    if(cur.first != cur.second || cur.second != vmas.end()){
+        printf("Requested virtual mapping not possible. Address in use. Returning different address");
+        return this->allocate(v, size);
+    }
+
+    unsigned segment_index = virt_to_segment_index(start);
+    // Check if the mapping would cross segment borders
+    if(segment_index != virt_to_segment_index(start+size)){
+        printf("Requested virtual mapping not possible. Segment border crossed. Returning different address");
+        return this->allocate(v, size);
+    }
+
+    SCOPE_LOCK(rwlock.for_write());
+    for(auto& s : segments){
+        if(s.index == segment_index){
+            unsigned long offset = (start + size)% segment_size;
+            if(s.offset > offset){
+                assert(s.freed_bytes > size);
+                s.freed_bytes -= size;
+            } else {
+                s.offset = std::max(s.offset, offset);
+                s.freed_bytes += offset - size - s.offset;
+            }
+            break;
+        }
+    }
+
+    v->set(start, start+size);
+    vmas.insert(*v);
+
+    return start;
+}
+
+unsigned long segment_allocator::evacuate(uintptr_t addr){
+  SCOPE_LOCK(rwlock.for_write());
+  auto v = this->find_intersecting_vma(addr);
+  if(v == vmas.end())
+    return 0;
+
+  unsigned long size = v->operate_range(unpopulate<account_opt::yes>(v->page_ops()));
+  
+  unsigned segment_index = virt_to_segment_index(v->start());
+
+  if(v->size() < segment_size){
+
+      // Free part of a segment, only release the segment if it is fully freed
+      for (auto it = segments.begin(); it != segments.end(); ++it) {
+          if (it->index == segment_index) {
+              // If we freed the last element of the segment, we set offset back
+              if (it->offset == v->end() % segment_size){
+                  it->offset -= v->size();
+              } else {
+                  it->freed_bytes += v->size();
+              }
+              // If all elements in this segment are free, we return it to the global list
+              if (it->freed_bytes == it->offset) {
+                  segments.erase(it);
+                  release_segments(segment_index, 1, cpu_id);
+                  break;
+              }
+          }
+      }
+  } else {
+
+      // Free needed_segments
+      unsigned needed_segments = (v->size() - 1) / segment_size + 1;
+
+      for (auto it = segments.begin(); it != segments.end(); ++it) {
+          if (it->index == segment_index) {
+              segments.erase(it, std::next(it, needed_segments-1));
+              release_segments(segment_index, needed_segments, cpu_id);
+              break;
+          }
+      }
+  }
+
+  vmas.erase(v);
+  delete &*v;
+
+  // page_cache.erase(v) // TODO
+
+  return size;
 }
 
 inline bool in_vma_range(void* addr)

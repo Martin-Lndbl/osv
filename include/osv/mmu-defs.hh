@@ -66,8 +66,8 @@ static char* const phys_mem = reinterpret_cast<char*>(main_mem_area_base);
 constexpr uintptr_t debug_mem_area_base = get_mem_area_base(mem_area::debug);
 static char* const debug_base = reinterpret_cast<char*>(debug_mem_area_base);
 
-// Size of one virtual segment
-constexpr unsigned long segment_size = 16ul << 30;
+// Size of one virtual segment. Must be evenly divide segment_area_base 
+constexpr unsigned long segment_size = 16ul << 20;
 
 // Start address of virtual segments
 constexpr unsigned long segment_area_base = 0x200000000000ul;

@@ -206,6 +206,9 @@ struct vma_list_type : vma_list_base {
     vma_list_type();
 };
 
+struct vma_list_t : vma_list_base {
+};
+
 struct virt_segment {
     unsigned long index;
     unsigned long offset{0};
@@ -216,24 +219,48 @@ struct virt_segment {
       index(index), offset(offset), freed_bytes(freed_bytes){}
 };
 
+// Initialize / Update segment allocators
+void init_segment_allocator(uint8_t cores);
+
+constexpr uintptr_t segment_index_to_virt(unsigned index){
+  return segment_area_base + segment_size * index;
+}
+
+constexpr unsigned virt_to_segment_index(uintptr_t virt){
+  return (virt - segment_area_base) / segment_size;
+}
+
 struct segment_allocator {
   private:
     std::list<virt_segment> segments;
-    vma_list_type vmas;
-    vma_list_type page_cache;
+    vma_list_t vmas;
+    vma_list_t page_cache;
     rwlock_t rwlock;
     uint8_t cpu_id;
 
-    vma_list_type::iterator find_intersecting_vma(uintptr_t addr);
+    // Find the single (if any) vma which contains the given address.
+    // The complexity is logarithmic in the number of vmas in this segment allocators vmas set.
+    vma_list_t::iterator
+    find_intersecting_vma(uintptr_t addr);
 
-    bool get_segments(unsigned n);
+    // Find the list of vmas which intersect a given address range. Because the
+    // vmas are sorted in the allocators set, the result is a consecutive slice of vma_list,
+    // [first, second), between the first returned iterator (inclusive), and the
+    // second returned iterator (not inclusive).
+    // The complexity is logarithmic in the number of vmas.
+    std::pair<vma_list_t::iterator, vma_list_t::iterator>
+    find_intersecting_vmas(const addr_range& r);
   public:
-    // Allocates a virtual memory region of the given size.
-    void allocate(vma& v, unsigned long size, unsigned perm, unsigned flags);
 
-    // Frees a virtual memory region if one exists at the given address.
+    // Allocates a virtual memory region of the given size.
+    uintptr_t allocate(vma *v, unsigned long size);
+
+    // Allocates a virtual memory region of the given size starting from the given address
+    uintptr_t allocate_at(vma *v, uintptr_t start, unsigned long size);
+
+    // Evacuates a virtual memory region if one exists at the given address.
     // Also frees physical memory is exists.
-    bool free(uintptr_t addr);
+    unsigned long evacuate(uintptr_t addr);
 
     // Returns a reference to the corresponding vma.
     vma& get(uintptr_t addr);

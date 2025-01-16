@@ -43,7 +43,7 @@ extern size_t elf_size;
 
 extern const char text_start[], text_end[];
 
-// #define SEGMENT_ALLOCATION
+#define SEGMENT_ALLOCATION
 
 namespace mmu {
 
@@ -103,7 +103,13 @@ vma_list_type::vma_list_type() {
     // simplifies searches
     auto lower_edge = new anon_vma(addr_range(lower_vma_limit, lower_vma_limit), 0, 0);
     insert(*lower_edge);
-    auto upper_edge = new anon_vma(addr_range(upper_vma_limit, upper_vma_limit), 0, 0);
+    auto upper_edge = new anon_vma(
+#ifdef SEGMENT_ALLOCATION
+        addr_range(segment_area_base, upper_vma_limit)
+#else
+        addr_range(upper_vma_limit, upper_vma_limit)
+#endif
+        , 0, 0);
     insert(*upper_edge);
 
     WITH_LOCK(vma_range_set_mutex.for_write()) {
@@ -1080,21 +1086,24 @@ ulong evacuate(uintptr_t start, uintptr_t end)
 
 static void unmap(const void* addr, size_t size)
 {
-#ifndef SEGMENT_ALLOCATION
+#ifdef SEGMENT_ALLOCATION
+    uintptr_t start = reinterpret_cast<uintptr_t>(addr);
+    if(start >= segment_area_base && start + size < main_mem_area_base){
+        uintptr_t virt = reinterpret_cast<uintptr_t>(addr);
+        unsigned segment = virt_to_segment_index(virt);
+        uint8_t cpuid = virt_segments[segment].load(std::memory_order_relaxed);
+        // printf("a: 0x%lx ", virt);
+        // printf("s: %d ", segment);
+        // printf("c: %d\n", cpuid);
+        assert(cpuid < 64);
+
+        segment_allocators[cpuid].evacuate(virt);
+        return;
+    }
+#else
     size = align_up(size, mmu::page_size);
     auto start = reinterpret_cast<uintptr_t>(addr);
     evacuate(start, start+size);
-#else
-    uintptr_t virt = reinterpret_cast<uintptr_t>(addr);
-    unsigned segment = virt_to_segment_index(virt);
-    uint8_t cpuid = virt_segments[segment].load(std::memory_order_relaxed);
-    // printf("a: 0x%lx ", virt);
-    // printf("s: %d ", segment);
-    // printf("c: %d\n", cpuid);
-    assert(cpuid < 64);
-
-    segment_allocators[cpuid].evacuate(virt);
-
 #endif
 }
 
@@ -1210,10 +1219,43 @@ public:
     }
 };
 
+// Tries to allocate the segment containing addr with the given cpuid,
+// returns the segment_allocator index containing it
+uint8_t try_reserve_segment(uint8_t cpuid, uintptr_t addr){
+     const unsigned segment_index = virt_to_segment_index(addr);
+
+     for(;;){
+        uint8_t allocated_index = virt_segments[segment_index].load(std::memory_order_relaxed);
+
+        if(allocated_index != 255)
+            return allocated_index;
+
+        if(virt_segments[segment_index].compare_exchange_weak(allocated_index, cpuid, std::memory_order_acq_rel))
+            return cpuid;
+     }
+
+}
+
 uintptr_t allocate(vma *v, uintptr_t start, size_t size, bool search)
 {
-#ifndef SEGMENT_ALLOCATION
+#ifdef SEGMENT_ALLOCATION
+  uint8_t allocator_index = 0; // TODO
+
+    if(search)
+        return segment_allocators[allocator_index].allocate(v, size);
+
+    // Inside segment range
+    if(start >= segment_area_base && start + size < main_mem_area_base){
+        allocator_index = try_reserve_segment(allocator_index, start);
+        return segment_allocators[allocator_index].allocate_at(v, start, size);
+    }
+
+#endif
     if (search) {
+#ifdef SEGMENT_ALLOCATION
+      printf("search outside range not supported\n");
+      return 0;
+#endif
         // search for unallocated hole around start
         if (!start) {
             start = 0x200000000000ul;
@@ -1231,23 +1273,6 @@ uintptr_t allocate(vma *v, uintptr_t start, size_t size, bool search)
     }
 
     return start;
-#else
-    const uint8_t allocator_index = 0; // TODO
-    const unsigned segment_index = virt_to_segment_index(start);
-
-    for(;;){
-        if(!search)
-            return segment_allocators[allocator_index].allocate(v, size);
-
-        uint8_t allocated_index = virt_segments[segment_index].load(std::memory_order_relaxed);
-
-        if(allocated_index != 255)
-            return segment_allocators[allocated_index].allocate_at(v, start, size);
-
-        if(virt_segments[segment_index].compare_exchange_weak(allocated_index, allocator_index, std::memory_order_acq_rel))
-            return segment_allocators[allocator_index].allocate_at(v, start, size);
-    }
-#endif
 }
 
 // Release n segments starting from start
@@ -1335,9 +1360,10 @@ uintptr_t segment_allocator::allocate(vma *v, unsigned long size) {
                 unsigned long start = segment_area_base + segment.index * segment_size + segment.offset;
                 segment.offset += size;
 
-                v->set(start, start + size);
-                vmas.insert(*v);
-                // page_cache.insert(*v); // TODO
+                if(v){
+                    v->set(start, start + size);
+                    vmas.insert(*v);
+                }
                                       
                 return start;
             }
@@ -1353,9 +1379,10 @@ uintptr_t segment_allocator::allocate(vma *v, unsigned long size) {
         segments.push_back(virt_segment(start + i, segment_size, 0));
     }
 
-    v->set(start, start+size);
-    vmas.insert(*v);
-    // page_cache.insert(*v); // TODO
+    if(v){
+        v->set(start, start+size);
+        vmas.insert(*v);
+    }
     return start;
 }
 
@@ -1393,8 +1420,10 @@ uintptr_t segment_allocator::allocate_at(vma *v, uintptr_t start, unsigned long 
         }
     }
 
-    v->set(start, start+size);
-    vmas.insert(*v);
+    if(v){
+        v->set(start, start+size);
+        vmas.insert(*v);
+    }
 
     return start;
 }
@@ -1552,7 +1581,9 @@ void* map_anon(const void* addr, size_t size, unsigned flags, unsigned perm)
     auto start = reinterpret_cast<uintptr_t>(addr);
     auto* vma = new mmu::anon_vma(addr_range(start, start + size), perm, flags);
     PREVENT_STACK_PAGE_FAULT
+#ifndef SEGMENT_ALLOCATION
     SCOPE_LOCK(vma_list_mutex.for_write());
+#endif
     auto v = (void*) allocate(vma, start, size, search);
     if (flags & mmap_populate) {
         populate_vma(vma, v, size);
@@ -1579,12 +1610,16 @@ void* map_file(const void* addr, size_t size, unsigned flags, unsigned perm,
     auto *vma = f->mmap(addr_range(start, start + size), flags | mmap_file, perm, offset).release();
     void *v;
     PREVENT_STACK_PAGE_FAULT
+#ifndef SEGMENT_ALLOCATION
     WITH_LOCK(vma_list_mutex.for_write()) {
+#endif
         v = (void*) allocate(vma, start, size, search);
         if (flags & mmap_populate) {
             populate_vma(vma, v, std::min(size, align_up(::size(f), page_size)));
         }
+#ifndef SEGMENT_ALLOCATION
     }
+#endif
     return v;
 }
 
@@ -1599,6 +1634,7 @@ bool is_linear_mapped(const void *addr, size_t size)
 // Checks if the entire given memory region is mmap()ed (in vma_list).
 bool ismapped(const void *addr, size_t size)
 {
+    // TODO
     uintptr_t start = (uintptr_t) addr;
     uintptr_t end = start + size;
 
@@ -1664,6 +1700,7 @@ static void vm_sigbus(uintptr_t addr, exception_frame* ef)
 
 void vm_fault(uintptr_t addr, exception_frame* ef)
 {
+  // TODO
     trace_mmu_vm_fault(addr, ef->get_error());
     if (fast_sigsegv_check(addr, ef)) {
         vm_sigsegv(addr, ef);
@@ -2256,9 +2293,14 @@ void linear_map(void* _virt, phys addr, size_t size, const char* name,
     WITH_LOCK(linear_vma_set_mutex.for_write()) {
        linear_vma_set.insert(_vma);
     }
+#ifndef SEGMENT_ALLOCATION
     WITH_LOCK(vma_range_set_mutex.for_write()) {
        vma_range_set.insert(vma_range(_vma));
     }
+#else
+    if(virt >= segment_area_base && virt + size < main_mem_area_base)
+        allocate(nullptr, virt, size, false);
+#endif
 }
 
 unsigned tmp{0};
@@ -2294,24 +2336,29 @@ error mprotect(const void *addr, size_t len, unsigned perm)
 error munmap(const void *addr, size_t length)
 {
     PREVENT_STACK_PAGE_FAULT
+    length = align_up(length, mmu::page_size);
+#ifndef SEGMENT_ALLOCATION
     SCOPE_LOCK(vma_list_mutex.for_write());
 
-    length = align_up(length, mmu::page_size);
     if (!ismapped(addr, length)) {
         return make_error(EINVAL);
     }
+#endif
     sync(addr, length, 0);
     unmap(addr, length);
+
     return no_error();
 }
 
 error msync(const void* addr, size_t length, int flags)
 {
+#ifndef SEGMENT_ALLOCATION
     SCOPE_LOCK(vma_list_mutex.for_read());
 
     if (!ismapped(addr, length)) {
         return make_error(ENOMEM);
     }
+#endif
     return sync(addr, length, flags);
 }
 
@@ -2335,6 +2382,7 @@ error mincore(const void *addr, size_t length, unsigned char *vec)
 
 std::string procfs_maps()
 {
+  //TODO
     std::string output;
     WITH_LOCK(vma_list_mutex.for_read()) {
         for (auto& vma : vma_list) {

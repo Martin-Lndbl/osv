@@ -6,6 +6,7 @@
  */
 
 #include <osv/mmu.hh>
+#include <osv/vma_store.hh>
 #include <osv/mempool.hh>
 #include "processor.hh"
 #include <osv/debug.hh>
@@ -46,80 +47,16 @@ extern const char text_start[], text_end[];
 namespace mmu {
 
 #if CONF_lazy_stack
-// We need to ensure that lazy stack is populated deeply enough (2 pages)
-// for all the cases when the vma_list_mutex is taken for write to prevent
-// page faults triggered on stack. The page-fault handling logic would
-// attempt to take same vma_list_mutex fo read and end up with a deadlock.
 #define PREVENT_STACK_PAGE_FAULT \
     arch::ensure_next_two_stack_pages();
 #else
 #define PREVENT_STACK_PAGE_FAULT
 #endif
 
-struct vma_range_compare {
-    bool operator()(const vma_range& a, const vma_range& b) const {
-        return a.start() < b.start();
-    }
-};
-
-//Set of all vma ranges - both linear and non-linear ones
 __attribute__((init_priority((int)init_prio::vma_range_set)))
-std::set<vma_range, vma_range_compare> vma_range_set;
-rwlock_t vma_range_set_mutex;
+vma_store vma_manager;
 
-struct linear_vma_compare {
-    bool operator()(const linear_vma* a, const linear_vma* b) const {
-        return a->_virt_addr < b->_virt_addr;
-    }
-};
-
-__attribute__((init_priority((int)init_prio::linear_vma_set)))
-std::set<linear_vma*, linear_vma_compare> linear_vma_set;
-rwlock_t linear_vma_set_mutex;
-
-namespace bi = boost::intrusive;
-
-class vma_compare {
-public:
-    bool operator ()(const vma& a, const vma& b) const {
-        return a.addr() < b.addr();
-    }
-};
-
-constexpr uintptr_t lower_vma_limit = 0x0;
-constexpr uintptr_t upper_vma_limit = 0x400000000000;
-
-typedef boost::intrusive::set<vma,
-                              bi::compare<vma_compare>,
-                              bi::member_hook<vma,
-                                              bi::set_member_hook<>,
-                                              &vma::_vma_list_hook>,
-                              bi::optimize_size<true>
-                              > vma_list_base;
-
-struct vma_list_type : vma_list_base {
-    vma_list_type() {
-        // insert markers for the edges of allocatable area
-        // simplifies searches
-        auto lower_edge = new anon_vma(addr_range(lower_vma_limit, lower_vma_limit), 0, 0);
-        insert(*lower_edge);
-        auto upper_edge = new anon_vma(addr_range(upper_vma_limit, upper_vma_limit), 0, 0);
-        insert(*upper_edge);
-
-        WITH_LOCK(vma_range_set_mutex.for_write()) {
-            vma_range_set.insert(vma_range(lower_edge));
-            vma_range_set.insert(vma_range(upper_edge));
-        }
-    }
-};
-
-__attribute__((init_priority((int)init_prio::vma_list)))
-vma_list_type vma_list;
-
-// protects vma list and page table modifications.
-// anything that may add, remove, split vma, zaps pte or changes pte permission
-// should hold the lock for write
-rwlock_t vma_list_mutex;
+rwlock_t vma_populate_mutex;
 
 // A mutex serializing modifications to the high part of the page table
 // (linear map, etc.) which are not part of vma_list.
@@ -283,11 +220,6 @@ struct page_allocator {
     virtual ~page_allocator() {}
 };
 
-unsigned long all_vmas_size()
-{
-    SCOPE_LOCK(vma_list_mutex.for_read());
-    return std::accumulate(vma_list.begin(), vma_list.end(), size_t(0), [](size_t s, vma& v) { return s + v.size(); });
-}
 
 void clamp(uintptr_t& vstart1, uintptr_t& vend1,
            uintptr_t min, size_t max, size_t slop)
@@ -920,65 +852,6 @@ bool contains(uintptr_t start, uintptr_t end, vma& y)
     return y.start() >= start && y.end() <= end;
 }
 
-// So that we don't need to create a vma (with size, permission and alot of
-// other irrelevant data) just to find an address in the vma list, we have
-// the following addr_compare, which compares exactly like vma_compare does,
-// except that it takes a bare uintptr_t instead of a vma.
-class addr_compare {
-public:
-    bool operator()(const vma& x, uintptr_t y) const { return x.start() < y; }
-    bool operator()(uintptr_t x, const vma& y) const { return x < y.start(); }
-};
-
-// Find the single (if any) vma which contains the given address.
-// The complexity is logarithmic in the number of vmas in vma_list.
-static inline vma_list_type::iterator
-find_intersecting_vma(uintptr_t addr) {
-    auto vma = vma_list.lower_bound(addr, addr_compare());
-    if (vma->start() == addr) {
-        return vma;
-    }
-    // Otherwise, vma->start() > addr, so we need to check the previous vma
-    --vma;
-    if (addr >= vma->start() && addr < vma->end()) {
-        return vma;
-    } else {
-        return vma_list.end();
-    }
-}
-
-// Find the list of vmas which intersect a given address range. Because the
-// vmas are sorted in vma_list, the result is a consecutive slice of vma_list,
-// [first, second), between the first returned iterator (inclusive), and the
-// second returned iterator (not inclusive).
-// The complexity is logarithmic in the number of vmas in vma_list.
-static inline std::pair<vma_list_type::iterator, vma_list_type::iterator>
-find_intersecting_vmas(const addr_range& r)
-{
-    if (r.end() <= r.start()) { // empty range, so nothing matches
-        return {vma_list.end(), vma_list.end()};
-    }
-    auto start = vma_list.lower_bound(r.start(), addr_compare());
-    if (start->start() > r.start()) {
-        // The previous vma might also intersect with our range if it ends
-        // after our range's start.
-        auto prev = std::prev(start);
-        if (prev->end() > r.start()) {
-            start = prev;
-        }
-    }
-    // If the start vma is actually beyond the end of the search range,
-    // there is no intersection.
-    if (start->start() >= r.end()) {
-        return {vma_list.end(), vma_list.end()};
-    }
-    // end is the first vma starting >= r.end(), so any previous vma (after
-    // start) surely started < r.end() so is part of the intersection.
-    auto end = vma_list.lower_bound(r.end(), addr_compare());
-    return {start, end};
-}
-
-
 /**
  * Change virtual memory range protection
  *
@@ -991,7 +864,7 @@ static error protect(const void *addr, size_t size, unsigned int perm)
 {
     uintptr_t start = reinterpret_cast<uintptr_t>(addr);
     uintptr_t end = start + size;
-    auto range = find_intersecting_vmas(addr_range(start, end));
+    auto range = vma_manager.find_intersecting_vmas(addr_range(start, end));
     for (auto i = range.first; i != range.second; ++i) {
         if (i->perm() == perm)
             continue;
@@ -1009,53 +882,10 @@ static error protect(const void *addr, size_t size, unsigned int perm)
     return no_error();
 }
 
-class vma_range_addr_compare {
-public:
-    bool operator()(const vma_range& x, uintptr_t y) const { return x.start() < y; }
-    bool operator()(uintptr_t x, const vma_range& y) const { return x < y.start(); }
-};
-
-uintptr_t find_hole(uintptr_t start, uintptr_t size)
-{
-    bool small = size < huge_page_size;
-    uintptr_t good_enough = 0;
-
-    SCOPE_LOCK(vma_range_set_mutex.for_read());
-    //Find first vma range which starts before the start parameter or is the 1st one
-    auto p = std::lower_bound(vma_range_set.begin(), vma_range_set.end(), start, vma_range_addr_compare());
-    if (p != vma_range_set.begin()) {
-        --p;
-    }
-    auto n = std::next(p);
-    while (n->start() <= upper_vma_limit) { //we only go up to the upper mmap vma limit
-        //See if desired hole fits between p and n vmas
-        if (start >= p->end() && start + size <= n->start()) {
-            return start;
-        }
-        //See if shifting start to the end of p makes desired hole fit between p and n
-        if (p->end() >= start && n->start() - p->end() >= size) {
-            good_enough = p->end();
-            if (small) {
-                return good_enough;
-            }
-            //See if huge hole fits between p and n
-            if (n->start() - align_up(good_enough, huge_page_size) >= size) {
-                return align_up(good_enough, huge_page_size);
-            }
-        }
-        //If nothing worked move next in the list
-        p = n;
-        ++n;
-    }
-    if (good_enough) {
-        return good_enough;
-    }
-    throw make_error(ENOMEM);
-}
 
 ulong evacuate(uintptr_t start, uintptr_t end)
 {
-    auto range = find_intersecting_vmas(addr_range(start, end));
+    auto range = vma_manager.find_intersecting_vmas(addr_range(start, end));
     ulong ret = 0;
     for (auto i = range.first; i != range.second; ++i) {
         i->split(end);
@@ -1069,11 +899,7 @@ ulong evacuate(uintptr_t start, uintptr_t end)
                 memory::stats::on_jvm_heap_free(size);
             }
 #endif
-            vma_list.erase(dead);
-            WITH_LOCK(vma_range_set_mutex.for_write()) {
-                vma_range_set.erase(vma_range(&dead));
-            }
-            delete &dead;
+            vma_manager.vma_erase(dead);
         }
     }
     return ret;
@@ -1093,7 +919,7 @@ static error sync(const void* addr, size_t length, int flags)
     auto start = reinterpret_cast<uintptr_t>(addr);
     auto end = start+length;
     auto err = make_error(ENOMEM);
-    auto range = find_intersecting_vmas(addr_range(start, end));
+    auto range = vma_manager.find_intersecting_vmas(addr_range(start, end));
     for (auto i = range.first; i != range.second; ++i) {
         err = i->sync(std::max(start, i->start()), std::min(end, i->end()));
         if (err.bad()) {
@@ -1206,18 +1032,14 @@ uintptr_t allocate(vma *v, uintptr_t start, size_t size, bool search)
         if (!start) {
             start = 0x200000000000ul;
         }
-        start = find_hole(start, size);
+        start = vma_manager.reserve(v, start, size);
     } else {
         // we don't know if the given range is free, need to evacuate it first
         evacuate(start, start+size);
     }
-    v->set(start, start+size);
 
-    vma_list.insert(*v);
-    WITH_LOCK(vma_range_set_mutex.for_write()) {
-        vma_range_set.insert(vma_range(v));
-    }
-
+    vma_manager.vma_insert(v);
+  
     return start;
 }
 
@@ -1257,7 +1079,7 @@ static void depopulate(void* addr, size_t length)
 {
     length = align_up(length, mmu::page_size);
     auto start = reinterpret_cast<uintptr_t>(addr);
-    auto range = find_intersecting_vmas(addr_range(start, start + length));
+    auto range = vma_manager.find_intersecting_vmas(addr_range(start, start + length));
     for (auto i = range.first; i != range.second; ++i) {
         i->operate_range(unpopulate<>(i->page_ops()), reinterpret_cast<void*>(start), std::min(length, i->size()));
         start += i->size();
@@ -1269,7 +1091,7 @@ static void nohugepage(void* addr, size_t length)
 {
     length = align_up(length, mmu::page_size);
     auto start = reinterpret_cast<uintptr_t>(addr);
-    auto range = find_intersecting_vmas(addr_range(start, start + length));
+    auto range = vma_manager.find_intersecting_vmas(addr_range(start, start + length));
     for (auto i = range.first; i != range.second; ++i) {
         if (!i->has_flags(mmap_small)) {
             i->update_flags(mmap_small);
@@ -1283,7 +1105,7 @@ static void nohugepage(void* addr, size_t length)
 error advise(void* addr, size_t size, int advice)
 {
     PREVENT_STACK_PAGE_FAULT
-    WITH_LOCK(vma_list_mutex.for_write()) {
+    WITH_LOCK(vma_populate_mutex.for_write()) {
         if (!ismapped(addr, size)) {
             return make_error(ENOMEM);
         }
@@ -1323,10 +1145,11 @@ void* map_anon(const void* addr, size_t size, unsigned flags, unsigned perm)
     auto start = reinterpret_cast<uintptr_t>(addr);
     auto* vma = new mmu::anon_vma(addr_range(start, start + size), perm, flags);
     PREVENT_STACK_PAGE_FAULT
-    SCOPE_LOCK(vma_list_mutex.for_write());
     auto v = (void*) allocate(vma, start, size, search);
     if (flags & mmap_populate) {
+      WITH_LOCK(vma_populate_mutex.for_write()){
         populate_vma(vma, v, size);
+      }
     }
     return v;
 }
@@ -1350,9 +1173,9 @@ void* map_file(const void* addr, size_t size, unsigned flags, unsigned perm,
     auto *vma = f->mmap(addr_range(start, start + size), flags | mmap_file, perm, offset).release();
     void *v;
     PREVENT_STACK_PAGE_FAULT
-    WITH_LOCK(vma_list_mutex.for_write()) {
-        v = (void*) allocate(vma, start, size, search);
-        if (flags & mmap_populate) {
+    v = (void*) allocate(vma, start, size, search);
+    if (flags & mmap_populate) {
+        WITH_LOCK(vma_populate_mutex.for_write()) {
             populate_vma(vma, v, std::min(size, align_up(::size(f), page_size)));
         }
     }
@@ -1373,7 +1196,7 @@ bool ismapped(const void *addr, size_t size)
     uintptr_t start = (uintptr_t) addr;
     uintptr_t end = start + size;
 
-    auto range = find_intersecting_vmas(addr_range(start, end));
+    auto range = vma_manager.find_intersecting_vmas(addr_range(start, end));
     for (auto p = range.first; p != range.second; ++p) {
         if (p->start() > start)
             return false;
@@ -1450,15 +1273,13 @@ void vm_fault(uintptr_t addr, exception_frame* ef)
     }
 #endif
     addr = align_down(addr, mmu::page_size);
-    WITH_LOCK(vma_list_mutex.for_read()) {
-        auto vma = find_intersecting_vma(addr);
-        if (vma == vma_list.end() || access_fault(*vma, ef->get_error())) {
-            vm_sigsegv(addr, ef);
-            trace_mmu_vm_fault_sigsegv(addr, ef->get_error(), "slow");
-            return;
-        }
-        vma->fault(addr, ef);
+    auto vma = vma_manager.find_intersecting_vma(addr);
+    if (vma == vma_manager.end() || access_fault(*vma, ef->get_error())) {
+        vm_sigsegv(addr, ef);
+        trace_mmu_vm_fault_sigsegv(addr, ef->get_error(), "slow");
+        return;
     }
+    vma->fault(addr, ef);
     trace_mmu_vm_fault_ret(addr, ef->get_error());
 }
 
@@ -1517,7 +1338,6 @@ unsigned vma::flags() const
 
 void vma::update_flags(unsigned flag)
 {
-    assert(vma_list_mutex.wowned());
     _flags |= flag;
 }
 
@@ -1561,8 +1381,10 @@ mmap_small) && (hp_start <= addr && addr < hp_end)) {
 #if CONF_memory_jvm_balloon
     auto total =
 #endif
-    populate_vma<account_opt::yes>(this, (void*)addr, size,
-        mmu::is_page_fault_write(ef->get_error()));
+      WITH_LOCK(vma_populate_mutex.for_write()){
+          populate_vma<account_opt::yes>(this, (void*)addr, size,
+              mmu::is_page_fault_write(ef->get_error()));
+      }
 
 #if CONF_memory_jvm_balloon
     if (_flags & mmap_jvm_heap) {
@@ -1592,10 +1414,7 @@ void anon_vma::split(uintptr_t edge)
     }
     vma* n = new anon_vma(addr_range(edge, _range.end()), _perm, _flags);
     set(_range.start(), edge);
-    vma_list.insert(*n);
-    WITH_LOCK(vma_range_set_mutex.for_write()) {
-        vma_range_set.insert(vma_range(n));
-    }
+    vma_manager.vma_insert(n);
 }
 
 error anon_vma::sync(uintptr_t start, uintptr_t end)
@@ -1873,10 +1692,7 @@ void file_vma::split(uintptr_t edge)
     auto off = offset(edge);
     vma *n = _file->mmap(addr_range(edge, _range.end()), _flags, _perm, off).release();
     set(_range.start(), edge);
-    vma_list.insert(*n);
-    WITH_LOCK(vma_range_set_mutex.for_write()) {
-        vma_range_set.insert(vma_range(n));
-    }
+    vma_manager.vma_insert(n);
 }
 
 error file_vma::sync(uintptr_t start, uintptr_t end)
@@ -2003,18 +1819,6 @@ linear_vma::linear_vma(void* virt, phys phys, size_t size, mattr mem_attr, const
 linear_vma::~linear_vma() {
 }
 
-std::string sysfs_linear_maps() {
-    std::string output;
-    WITH_LOCK(linear_vma_set_mutex.for_read()) {
-        for(auto *vma : linear_vma_set) {
-            char mattr = vma->_mem_attr == mmu::mattr::normal ? 'n' : 'd';
-            output += osv::sprintf("%18p %18p %12x rwxp %c %s\n",
-                vma->_virt_addr, (void*)vma->_phys_addr, vma->_size, mattr, vma->_name.c_str());
-        }
-    }
-    return output;
-}
-
 void linear_map(void* _virt, phys addr, size_t size, const char* name,
                 size_t slop, mattr mem_attr)
 {
@@ -2024,12 +1828,7 @@ void linear_map(void* _virt, phys addr, size_t size, const char* name,
     linear_page_mapper phys_map(addr, size, mem_attr);
     map_range(virt, virt, size, phys_map, slop);
     auto _vma = new linear_vma(_virt, addr, size, mem_attr, name);
-    WITH_LOCK(linear_vma_set_mutex.for_write()) {
-       linear_vma_set.insert(_vma);
-    }
-    WITH_LOCK(vma_range_set_mutex.for_write()) {
-       vma_range_set.insert(vma_range(_vma));
-    }
+    vma_manager.vma_insert(_vma);
 }
 
 unsigned tmp{0};
@@ -2053,7 +1852,6 @@ void free_initial_memory_range(uintptr_t addr, size_t size)
 error mprotect(const void *addr, size_t len, unsigned perm)
 {
     PREVENT_STACK_PAGE_FAULT
-    SCOPE_LOCK(vma_list_mutex.for_write());
 
     if (!ismapped(addr, len)) {
         return make_error(ENOMEM);
@@ -2065,7 +1863,6 @@ error mprotect(const void *addr, size_t len, unsigned perm)
 error munmap(const void *addr, size_t length)
 {
     PREVENT_STACK_PAGE_FAULT
-    SCOPE_LOCK(vma_list_mutex.for_write());
 
     length = align_up(length, mmu::page_size);
     if (!ismapped(addr, length)) {
@@ -2078,8 +1875,6 @@ error munmap(const void *addr, size_t length)
 
 error msync(const void* addr, size_t length, int flags)
 {
-    SCOPE_LOCK(vma_list_mutex.for_read());
-
     if (!ismapped(addr, length)) {
         return make_error(ENOMEM);
     }
@@ -2090,7 +1885,6 @@ error mincore(const void *addr, size_t length, unsigned char *vec)
 {
     char *end = align_up((char *)addr + length, page_size);
     char tmp;
-    SCOPE_LOCK(vma_list_mutex.for_read());
     if (!is_linear_mapped(addr, length) && !ismapped(addr, length)) {
         return make_error(ENOMEM);
     }
@@ -2104,29 +1898,18 @@ error mincore(const void *addr, size_t length, unsigned char *vec)
     return no_error();
 }
 
-std::string procfs_maps()
-{
-    std::string output;
-    WITH_LOCK(vma_list_mutex.for_read()) {
-        for (auto& vma : vma_list) {
-            char read    = vma.perm() & perm_read  ? 'r' : '-';
-            char write   = vma.perm() & perm_write ? 'w' : '-';
-            char execute = vma.perm() & perm_exec  ? 'x' : '-';
-            char priv    = 'p';
-            output += osv::sprintf("%lx-%lx %c%c%c%c ", vma.start(), vma.end(), read, write, execute, priv);
-            if (vma.flags() & mmap_file) {
-                const file_vma &f_vma = static_cast<file_vma&>(vma);
-                unsigned dev_id_major = major(f_vma.file_dev_id());
-                unsigned dev_id_minor = minor(f_vma.file_dev_id());
-                output += osv::sprintf("%08x %02x:%02x %ld %s\n", f_vma.offset(), dev_id_major, dev_id_minor, f_vma.file_inode(), f_vma.file()->f_dentry->d_path);
-            } else {
-                output += osv::sprintf("00000000 00:00 0\n");
-            }
-        }
-    }
-    return output;
+std::string sysfs_linear_maps(){
+    return vma_manager.sysfs_linear_maps();
 }
 
+std::string procfs_maps(){
+  return vma_manager.procfs_maps();
+}
+
+}
+
+unsigned long mmu::all_vmas_size(){
+  return vma_manager.all_vmas_size();
 }
 
 extern "C" bool is_linear_mapped(const void *addr)

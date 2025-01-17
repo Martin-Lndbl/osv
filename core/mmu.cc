@@ -43,7 +43,7 @@ extern size_t elf_size;
 
 extern const char text_start[], text_end[];
 
-#define SEGMENT_ALLOCATION
+// #define SEGMENT_ALLOCATION
 
 namespace mmu {
 
@@ -77,8 +77,6 @@ void __attribute__((constructor(init_prio::virt_segment_array))) setup(){
 // One allocator for each CPU, but globally accessible.
 __attribute__((init_priority((int)init_prio::virt_segment_array)))
 std::array<segment_allocator, 64> segment_allocators; // TODO consider other datastructure
-
-
 
 //Set of all vma ranges - both linear and non-linear ones
 __attribute__((init_priority((int)init_prio::vma_range_set)))
@@ -161,6 +159,10 @@ void* phys_to_virt(phys pa)
     }
 
     return phys_mem + pa;
+}
+
+uint8_t mmu_cpuid(){
+  return sched::cpu::current() ? sched::cpu::current()->id : 0;
 }
 
 phys virt_to_phys_pt(void* virt);
@@ -1091,13 +1093,10 @@ static void unmap(const void* addr, size_t size)
     if(start >= segment_area_base && start + size < main_mem_area_base){
         uintptr_t virt = reinterpret_cast<uintptr_t>(addr);
         unsigned segment = virt_to_segment_index(virt);
-        uint8_t cpuid = virt_segments[segment].load(std::memory_order_relaxed);
-        // printf("a: 0x%lx ", virt);
-        // printf("s: %d ", segment);
-        // printf("c: %d\n", cpuid);
-        assert(cpuid < 64);
+        uint8_t cpu_id = virt_segments[segment].load(std::memory_order_relaxed);
+        assert(cpu_id < 64);
 
-        segment_allocators[cpuid].evacuate(virt);
+        segment_allocators[cpu_id].evacuate(virt);
         return;
     }
 #else
@@ -1219,9 +1218,9 @@ public:
     }
 };
 
-// Tries to allocate the segment containing addr with the given cpuid,
+// Tries to allocate the segment containing addr with the given cpu_id,
 // returns the segment_allocator index containing it
-uint8_t try_reserve_segment(uint8_t cpuid, uintptr_t addr){
+uint8_t try_reserve_segment(uint8_t cpu_id, uintptr_t addr){
      const unsigned segment_index = virt_to_segment_index(addr);
 
      for(;;){
@@ -1230,8 +1229,8 @@ uint8_t try_reserve_segment(uint8_t cpuid, uintptr_t addr){
         if(allocated_index != 255)
             return allocated_index;
 
-        if(virt_segments[segment_index].compare_exchange_weak(allocated_index, cpuid, std::memory_order_acq_rel))
-            return cpuid;
+        if(virt_segments[segment_index].compare_exchange_weak(allocated_index, cpu_id, std::memory_order_acq_rel))
+            return cpu_id;
      }
 
 }
@@ -1239,15 +1238,17 @@ uint8_t try_reserve_segment(uint8_t cpuid, uintptr_t addr){
 uintptr_t allocate(vma *v, uintptr_t start, size_t size, bool search)
 {
 #ifdef SEGMENT_ALLOCATION
-  uint8_t allocator_index = 0; // TODO
+    uint8_t cpu_id = 0;//mmu_cpuid();
+
+    if(cpu_id != 0) abort();
 
     if(search)
-        return segment_allocators[allocator_index].allocate(v, size);
+        return segment_allocators[cpu_id].allocate(v, size);
 
     // Inside segment range
     if(start >= segment_area_base && start + size < main_mem_area_base){
-        allocator_index = try_reserve_segment(allocator_index, start);
-        return segment_allocators[allocator_index].allocate_at(v, start, size);
+        cpu_id = try_reserve_segment(cpu_id, start);
+        return segment_allocators[cpu_id].allocate_at(v, start, size);
     }
 
 #endif
@@ -1277,9 +1278,10 @@ uintptr_t allocate(vma *v, uintptr_t start, size_t size, bool search)
 
 // Release n segments starting from start
 void release_segments(unsigned start, unsigned n, uint8_t cpu_id){
-  for(unsigned i{start}; i < start +n; ++i){
+  for(unsigned i{start}; i < start + n; ++i){
       virt_segments[i].compare_exchange_weak(cpu_id, 255, std::memory_order_acq_rel);
   }
+  printf("[%d] released segments: %d + %d\n",cpu_id, start, n-1);
 }
 
 // Acquire n segments in a linear fashion
@@ -1300,6 +1302,7 @@ unsigned acquire_segments(unsigned n, uint8_t cpu_id){
                     return acquire_segments(n, cpu_id);
                 } else break;
             }
+            printf("[%d] acquired segments: %d + %d\n",cpu_id, i, n-1);
             return i-n+1;
         }
     }

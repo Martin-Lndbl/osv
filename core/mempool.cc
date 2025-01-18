@@ -1327,27 +1327,30 @@ static inline void* std_malloc(size_t size, size_t alignment)
     void *ret;
     size_t minimum_size = std::max(size, memory::pool::min_object_size);
 
-    if (memory::smp_allocator && size <= memory::pool::max_object_size && alignment <= minimum_size) {
-        unsigned n = ilog2_roundup(minimum_size);
+    // If the requested alignment is bigger than the requested size, a alignment sized 
+    // pool is chosen as they are always aligned at their own length.
+    size_t obj_size = std::max(minimum_size, alignment);
+
+    // Object sized requests - part of a page + header
+    if (memory::smp_allocator && obj_size <= memory::pool::max_object_size) {
+        unsigned n = ilog2_roundup(obj_size);
         ret = memory::malloc_pools[n].alloc();
         ret = translate_mem_area(mmu::mem_area::main, mmu::mem_area::mempool, ret);
         trace_memory_malloc_mempool(ret, size, 1 << n, alignment);
-    } else if (memory::smp_allocator && alignment <= memory::pool::max_object_size && minimum_size <= alignment) {
-        unsigned n = ilog2_roundup(alignment);
-        ret = memory::malloc_pools[n].alloc();
-        ret = translate_mem_area(mmu::mem_area::main, mmu::mem_area::mempool, ret);
-        trace_memory_malloc_mempool(ret, size, 1 << n, alignment);
-    } else if (!memory::smp_allocator && memory::will_fit_in_early_alloc_page(size,alignment)) {
+    } else if (memory::will_fit_in_early_alloc_page(size,alignment)) {
         ret = memory::early_alloc_object(size, alignment);
         ret = translate_mem_area(mmu::mem_area::main, mmu::mem_area::mempool, ret);
-    } else if (minimum_size <= mmu::page_size && alignment <= mmu::page_size) {
+
+    // Page sized requests
+    } else if (minimum_size <= mmu::page_size) {
         ret = mmu::translate_mem_area(mmu::mem_area::main, mmu::mem_area::page, memory::alloc_page());
         trace_memory_malloc_page(ret, size, mmu::page_size, alignment);
-    // TODO refine this else if to support allocations of higher alignments if llf_max_size is small enough
+
+    // Large requests
     } else {
         ret = memory::malloc_large(minimum_size, alignment, true, false);
-        trace_memory_malloc_page(ret, size, mmu::page_size, alignment);
-    } 
+        trace_memory_malloc_large(ret, size, mmu::page_size, alignment);
+    }
 
 #if CONF_memory_tracker
     memory::tracker_remember(ret, size);

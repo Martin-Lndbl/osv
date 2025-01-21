@@ -28,11 +28,10 @@ extern "C" void thread_mark_emergency();
 
 namespace memory {
 
-// Smallest size to be allocated by page frame allocator
-const size_t page_size = mmu::page_size;
+constexpr size_t page_size = mmu::page_size;
 
 // 4MiB as defined in <osv/llfree_platform.h>
-const size_t llf_max_size = mmu::page_size << 10;
+constexpr size_t llf_max_size = page_size << 10;
 
 // Sum of all memory regions known to the memory allocator
 extern size_t phys_mem_size;
@@ -52,31 +51,20 @@ public:
   /// Allocate a page
   void *alloc_page();
 
-  /// Allocate a number of pages and return the address with the given alignment
-  void *alloc_page(size_t size, size_t alignment);
-
   /// Allocate a frame of the given order without header information
   void *alloc_huge_page(unsigned order);
 
   /// Allocate the frame llfree keeps at the given index
   void *alloc_page_at(u64 frame);
 
-  /// Allocate a page before llfree is initialized
-  void *early_alloc_page(size_t size = page_size);
-
   /// Free a page with llfree
   void free_page(void *addr);
 
   /// Free a page of the corresponding order
-  void free_page(void *addr, size_t size);
-
-  /// Free a frame at addr with the given order
-  void free_huge_page(void *addr, unsigned order);
-
-  static size_t offset(size_t alignment);;
+  void free_page(void *addr, unsigned order);
 
   /// Calculate the order of memory to be allocated
-  static unsigned order(size_t size, size_t offset);;
+  static unsigned order(size_t size);;
 private:
   /// The actual llfree instance
   llfree_t *self{nullptr};
@@ -96,7 +84,10 @@ extern llf page_allocator;
 
 void add_llfree_region(void *mem_start, size_t mem_size);
 
-void setup_free_memory(void* start, size_t bytes);
+extern bool use_linear_map;
+static inline void activate_paging(){
+    use_linear_map = false;
+}
 
 namespace bi = boost::intrusive;
 
@@ -252,33 +243,14 @@ private:
     ssize_t bytes_until_normal() { return bytes_until_normal(pressure_level()); }
 };
 
-const unsigned page_ranges_max_order = 16;
-
 namespace stats {
     size_t free();
     size_t total();
-    size_t max_no_reclaim();
 #if CONF_memory_jvm_balloon
     size_t jvm_heap();
     void on_jvm_heap_alloc(size_t mem);
     void on_jvm_heap_free(size_t mem);
 #endif
-
-    struct page_ranges_stats {
-        struct {
-            size_t bytes;
-            size_t ranges_num;
-        } order[page_ranges_max_order + 1];
-    };
-
-    void get_page_ranges_stats(page_ranges_stats &stats);
-
-    struct pool_stats {
-        size_t _max;
-        size_t _nr;
-        size_t _watermark_lo;
-        size_t _watermark_hi;
-    };
 }
 
 class phys_contiguous_memory final {

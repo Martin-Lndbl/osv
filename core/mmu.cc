@@ -5,6 +5,8 @@
  * BSD license as described in the LICENSE file in the top-level directory.
  */
 
+#include <iostream>
+#include <osv/benchmark.hh>
 #include <osv/mmu.hh>
 #include <osv/vma_store.hh>
 #include <osv/mempool.hh>
@@ -43,6 +45,17 @@ extern void* elf_start;
 extern size_t elf_size;
 
 extern const char text_start[], text_end[];
+
+uint64_t lines[4] = {0};
+uint64_t ctr{0};
+
+void bench::evaluate_mmu(){
+  std::cout << "nooverfl " << lines[0] << std::endl;
+  std::cout << "lock     " << lines[1] << std::endl;
+  std::cout << "allocate " << lines[2] << std::endl;
+  std::cout << "populate " << lines[3] << std::endl;
+  std::cout << "count " << ctr << std::endl << std::flush;
+}
 
 namespace mmu {
 
@@ -1140,16 +1153,41 @@ ulong populate_vma(vma *vma, void *v, size_t size, bool write = false)
 
 void* map_anon(const void* addr, size_t size, unsigned flags, unsigned perm)
 {
-    bool search = !(flags & mmap_fixed);
-    size = align_up(size, mmu::page_size);
-    auto start = reinterpret_cast<uintptr_t>(addr);
-    auto* vma = new mmu::anon_vma(addr_range(start, start + size), perm, flags);
-    PREVENT_STACK_PAGE_FAULT
-    auto v = (void*) allocate(vma, start, size, search);
-    if (flags & mmap_populate) {
-      WITH_LOCK(vma_populate_mutex.for_write()){
-        populate_vma(vma, v, size);
-      }
+  void *v;
+    if(size == 0x10000 && flags == mmap_populate && !memory::use_linear_map)
+    {
+        bool search;
+        uintptr_t start;
+        anon_vma* vma;
+        search = !(flags & mmap_fixed);
+        size = align_up(size, mmu::page_size);
+        start = reinterpret_cast<uintptr_t>(addr);
+        vma = new mmu::anon_vma(addr_range(start, start + size), perm, flags);
+        uint64_t s;
+        uint64_t e;
+        uint64_t s2;
+        s = bench::rdtsc();
+        PREVENT_STACK_PAGE_FAULT;
+        lines[0] += bench::rdtsc() - s;
+        s = bench::rdtsc();
+        v = (void*) allocate(vma, start, size, search);
+        lines[1] += bench::rdtsc() - s;
+        s = bench::rdtsc();
+        if (flags & mmap_populate) {
+            WITH_LOCK(vma_populate_mutex.for_write()) {populate_vma(vma, v, size);}
+        }
+        lines[2] += bench::rdtsc() - s;
+        ++ctr;
+    } else {
+        bool search = !(flags & mmap_fixed);
+        size = align_up(size, mmu::page_size);
+        auto start = reinterpret_cast<uintptr_t>(addr);
+        auto* vma = new mmu::anon_vma(addr_range(start, start + size), perm, flags);
+        PREVENT_STACK_PAGE_FAULT
+        v = (void*) allocate(vma, start, size, search);
+        if (flags & mmap_populate) {
+            WITH_LOCK(vma_populate_mutex.for_write()) {populate_vma(vma, v, size);}
+        }
     }
     return v;
 }

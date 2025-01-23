@@ -2032,6 +2032,7 @@ void linear_map(void* _virt, phys addr, size_t size, const char* name,
     }
 }
 
+unsigned tmp{0};
 void free_initial_memory_range(uintptr_t addr, size_t size)
 {
     if (!size) {
@@ -2046,7 +2047,7 @@ void free_initial_memory_range(uintptr_t addr, size_t size)
         ++addr;
         --size;
     }
-    memory::free_initial_memory_range(phys_cast<void>(addr), size);
+    memory::add_llfree_region(phys_cast<void>(addr), size);
 }
 
 error mprotect(const void *addr, size_t len, unsigned perm)

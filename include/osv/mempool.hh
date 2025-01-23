@@ -8,9 +8,8 @@
 #ifndef MEMPOOL_HH
 #define MEMPOOL_HH
 
-#include <cstdint>
+#include "osv/llfree.h"
 #include <functional>
-#include <list>
 #include <boost/intrusive/set.hpp>
 #include <boost/intrusive/list.hpp>
 #include <osv/mutex.h>
@@ -29,11 +28,61 @@ extern "C" void thread_mark_emergency();
 
 namespace memory {
 
-const size_t page_size = 4096;
+constexpr size_t page_size = mmu::page_size;
 
+// 4MiB as defined in <osv/llfree_platform.h>
+constexpr size_t llf_max_size = page_size << 10;
+
+// Sum of all memory regions known to the memory allocator
 extern size_t phys_mem_size;
 
-void setup_free_memory(void* start, size_t bytes);
+class llf{
+public:
+  /// Initialize llfree with custom number of cores.
+  void init(size_t cores);
+
+  /// Returns if llfree is set up
+  bool is_ready();
+
+  /// Add physical memory regions llfree should be in charge of.
+  /// This function has no effect after llfree is ready
+  void add_region(void *mem_start, size_t mem_size);
+
+  /// Allocate a page
+  void *alloc_page();
+
+  /// Allocate a frame of the given order without header information
+  void *alloc_huge_page(unsigned order);
+
+  /// Allocate the frame llfree keeps at the given index
+  void *alloc_page_at(u64 frame);
+
+  /// Free a page with llfree
+  void free_page(void *addr);
+
+  /// Free a page of the corresponding order
+  void free_page(void *addr, unsigned order);
+
+  /// Calculate the order of memory to be allocated
+  static unsigned order(size_t size);;
+private:
+  /// The actual llfree instance
+  llfree_t *self{nullptr};
+  /// Whether llfree is ready
+  bool ready{false};
+
+  void* idx_to_virt(u64 idx);
+  u64 virt_to_idx(void *virt);
+
+  // llfree is not aware of different memory regions. To it the memory is contiguous from 0 - <highest physical address>
+  // Here we allocate gaps between memory regions and pages already allocated by the llfree_extern_allocator, so every page
+  // llfree returns after this is valid.
+  void reserve_allocated();
+};
+
+extern llf llfree_allocator;
+
+void add_llfree_region(void *mem_start, size_t mem_size);
 
 namespace bi = boost::intrusive;
 
@@ -189,36 +238,14 @@ private:
     ssize_t bytes_until_normal() { return bytes_until_normal(pressure_level()); }
 };
 
-const unsigned page_ranges_max_order = 16;
-
 namespace stats {
     size_t free();
     size_t total();
-    size_t max_no_reclaim();
 #if CONF_memory_jvm_balloon
     size_t jvm_heap();
     void on_jvm_heap_alloc(size_t mem);
     void on_jvm_heap_free(size_t mem);
 #endif
-
-    struct page_ranges_stats {
-        struct {
-            size_t bytes;
-            size_t ranges_num;
-        } order[page_ranges_max_order + 1];
-    };
-
-    void get_page_ranges_stats(page_ranges_stats &stats);
-
-    struct pool_stats {
-        size_t _max;
-        size_t _nr;
-        size_t _watermark_lo;
-        size_t _watermark_hi;
-    };
-
-    void get_global_l2_stats(pool_stats &stats);
-    void get_l1_stats(unsigned int cpu_id, stats::pool_stats &stats);
 }
 
 class phys_contiguous_memory final {

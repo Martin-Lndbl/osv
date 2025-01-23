@@ -115,6 +115,7 @@ void arch_setup_free_memory()
     auto e820_buffer = alloca(mb.mmap_length);
     auto e820_size = mb.mmap_length;
     memcpy(e820_buffer, reinterpret_cast<void*>(mb.mmap_addr), e820_size);
+
     for_each_e820_entry(e820_buffer, e820_size, [] (e820ent ent) {
         memory::phys_mem_size += ent.size;
     });
@@ -165,6 +166,8 @@ void arch_setup_free_memory()
         }
         mmu::free_initial_memory_range(ent.addr, ent.size);
     });
+
+
     for (auto&& area : mmu::identity_mapped_areas) {
         auto base = reinterpret_cast<void*>(get_mem_area_base(area));
         mmu::linear_map(base, 0, initial_map,
@@ -187,6 +190,7 @@ void arch_setup_free_memory()
     parse_cmdline(mb);
     // now that we have some free memory, we can start mapping the rest
     mmu::switch_to_runtime_page_tables();
+
     for_each_e820_entry(e820_buffer, e820_size, [] (e820ent ent) {
         //
         // Free the memory below elf_phys_start which we could not before
@@ -217,6 +221,16 @@ void arch_setup_free_memory()
         }
         mmu::free_initial_memory_range(ent.addr, ent.size);
     });
+
+    // Initialize llfree with 64 cores on default
+    //  * we don't know how many cores we will actually have, but having llfree
+    //    initialized with more cores doesn't have any performance drawbacks
+    //  * if we have more than 64 cores, we can update llfrees number of cores in a
+    //    lockfree manner, by remapping the page currently holding the llfree local
+    //    data into contiguous memory with the appended local data. This only works
+    //    for multiple of 64 cores as every core needs 64B of local data 
+    //    => pagesize holds local data for 64 cores
+    memory::llfree_allocator.init(64);
 }
 
 void arch_setup_tls(void *tls, const elf::tls_data& info)

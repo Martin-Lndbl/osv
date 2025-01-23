@@ -47,14 +47,15 @@ extern size_t elf_size;
 
 extern const char text_start[], text_end[];
 
-uint64_t lines[4] = {0};
+uint64_t lines[5] = {0};
 uint64_t ctr{0};
 
 void bench::evaluate_mmu(){
-  std::cout << "nooverfl " << lines[0] << std::endl;
-  std::cout << "lock     " << lines[1] << std::endl;
-  std::cout << "allocate " << lines[2] << std::endl;
-  std::cout << "populate " << lines[3] << std::endl;
+  std::cout << "find_intersecting " << lines[0] << std::endl;
+  std::cout << "split vmas        " << lines[1] << std::endl;
+  std::cout << "unpopulate        " << lines[2] << std::endl;
+  std::cout << "erase vmas        " << lines[3] << std::endl;
+  std::cout << "update_free_range " << lines[4] << std::endl;
   std::cout << "count " << ctr << std::endl << std::flush;
 }
 
@@ -1270,24 +1271,34 @@ static error protect(const void *addr, size_t size, unsigned int perm)
 
 ulong evacuate(uintptr_t start, uintptr_t end)
 {
+    u64 s = bench::rdtsc();
     auto range = sb_mgr->find_intersecting_vmas(addr_range(start, end));
+    lines[0] += bench::rdtsc() - s;
     ulong ret = 0;
     for (auto i = range.first; i != range.second; ++i) {
+        s = bench::rdtsc();
         i->split(end);
         i->split(start);
+        lines[1] += bench::rdtsc() - s;
         if (contains(start, end, *i)) {
             auto& dead = *i--;
+            s = bench::rdtsc();
             auto size = dead.operate_range(unpopulate<account_opt::yes>(dead.page_ops()));
+            lines[2] += bench::rdtsc() - s;
             ret += size;
 #if CONF_memory_jvm_balloon
             if (dead.has_flags(mmap_jvm_heap)) {
                 memory::stats::on_jvm_heap_free(size);
             }
 #endif
+            s = bench::rdtsc();
             sb_mgr->erase(dead);
+            lines[3] += bench::rdtsc() - s;
+            s = bench::rdtsc();
             WITH_LOCK(sb_mgr->free_ranges_lock(dead.start()).for_write()) {
                 sb_mgr->free_range(dead.start(), dead.size());
             }
+            lines[4] += bench::rdtsc() - s;
         }
     }
     return ret;

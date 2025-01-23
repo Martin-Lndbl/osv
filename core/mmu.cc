@@ -45,6 +45,18 @@ extern size_t elf_size;
 
 extern const char text_start[], text_end[];
 
+uint64_t lines[5] = {0};
+uint64_t ctr{0};
+
+void bench::evaluate_mmu(){
+  std::cout << "find_intersecting " << lines[0] << std::endl;
+  std::cout << "split vmas        " << lines[1] << std::endl;
+  std::cout << "unpopulate        " << lines[2] << std::endl;
+  std::cout << "erase vmas        " << lines[3] << std::endl;
+  std::cout << "update_free_range " << lines[4] << std::endl;
+  std::cout << "count " << ctr << std::endl << std::flush;
+}
+
 namespace mmu {
 
 #if CONF_lazy_stack
@@ -1328,11 +1340,15 @@ ulong evacuate(vma& dead){
 
 ulong evacuate(uintptr_t start, uintptr_t end)
 {
+    u64 s = bench::rdtsc();
     auto range = sb_mgr->find_intersecting_vmas(addr_range(start, end));
+    lines[0] += bench::rdtsc() - s;
     ulong ret = 0;
     for (auto i = range.first; i != range.second; ++i) {
+        s = bench::rdtsc();
         i->split(end);
         i->split(start);
+        lines[1] += bench::rdtsc() - s;
         if (contains(start, end, *i)) {
             ret += evacuate(*i--);
         }

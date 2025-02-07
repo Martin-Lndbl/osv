@@ -1235,7 +1235,7 @@ void free_page(void* v)
 void* alloc_huge_page(size_t N)
 {
   if(!llfree_allocator.is_ready()){
-      return early_alloc_pages(N / page_size);
+      return early_alloc_pages(N);
   }
   return llfree_allocator.alloc_huge_page(llf::order(N));
 }
@@ -1243,7 +1243,7 @@ void* alloc_huge_page(size_t N)
 void free_huge_page(void* v, size_t N)
 {
   if(!llfree_allocator.is_ready()){
-      early_free_pages(v, N / page_size);
+      early_free_pages(v, N);
   } else {
       llfree_allocator.free_page(v, llf::order(N));
   }

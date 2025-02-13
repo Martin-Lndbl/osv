@@ -1351,7 +1351,6 @@ ulong evacuate(uintptr_t start, uintptr_t end)
         lines[1] += bench::rdtsc() - s;
         if (contains(start, end, *i)) {
             ret += evacuate(*i--);
-        }
     }
     return ret;
 }

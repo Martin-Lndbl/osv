@@ -87,6 +87,11 @@ extern llf llfree_allocator;
 
 void add_llfree_region(void *mem_start, size_t mem_size);
 
+extern bool use_linear_map;
+static inline void prefer_linear_mapping(bool state){
+    use_linear_map = state;
+}
+
 namespace bi = boost::intrusive;
 
 // Please note that early_page_header and pool:page_header

@@ -1,4 +1,5 @@
 #include <bypass/mem.hh>
+#include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -30,7 +31,7 @@ void rte_pktmbuf_read(rte_mbuf *m, uint32_t off,
         auto copy_len = seg->buf_len - off;
         if(copy_len > seg->buf_len)
             copy_len = seg->buf_len;
-        memcpy(reinterpret_cast<char*>(buf) + buf_off, seg->buf + off, copy_len);
+        memcpy(reinterpret_cast<char*>(buf) + buf_off, rte_pktmbuf_mtod(seg, char*) + off, copy_len);
         off = 0;
 		    buf_off += copy_len;
         len -= copy_len;
@@ -41,9 +42,10 @@ void rte_pktmbuf_read(rte_mbuf *m, uint32_t off,
 static int mb_ctor_buf(void * mem, int, void *arg, int){
     rte_mbuf* mbuf = static_cast<rte_mbuf*>(mem);
     rte_pktmbuf_pool* pool = static_cast<rte_pktmbuf_pool*>(arg);
+    assert(mbuf->refcnt == 0);
     mbuf->pool = pool;
-    mbuf->buf_len = pool->get_data_size();
     mbuf->next = nullptr;
+    mbuf->refcnt = 1;
     return 0;
 }
 
@@ -68,12 +70,12 @@ TRACEPOINT(trace_rte_pktmbuf_pool_alloc_bulk_ret, "");
 int rte_pktmbuf_pool::alloc_bulk(struct rte_mbuf** pkts, uint16_t nb){
     trace_rte_pktmbuf_pool_alloc_bulk(pkts, nb);
     uint16_t i;
-    if(!pool.can(nb))
+    if(!pool_impl.can_alloc(nb))
         return -ENOMEM;
-    for(i = 0; i < nb; ++i){
-        pkts[i] = pool.get();
+    pool_impl.get(pkts, nb);
+    for(i = 0; i < nb; ++i)
         mb_ctor_buf(pkts[i], 0, this, 0);
-    }
+    
     trace_rte_pktmbuf_pool_alloc_bulk_ret();
     return 0;
 
@@ -82,5 +84,6 @@ int rte_pktmbuf_pool::alloc_bulk(struct rte_mbuf** pkts, uint16_t nb){
 /* add freeing chains of buffer */
 void rte_pktmbuf_pool::free_bulk(struct rte_mbuf** pkts, uint16_t nb){
     for(uint16_t i = 0; i < nb; ++i)
-        pool.put(pkts[i]);
+        if(--pkts[i]->refcnt)
+            pool_impl.put(pkts[i]);
 }

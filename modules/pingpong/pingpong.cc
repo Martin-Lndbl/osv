@@ -28,7 +28,6 @@
 #include "net.hh"
 #include <osv/sched.hh>
 
-#include <bypass/dhcp.hh>
 static constexpr uint32_t pbuf_sz = 1400;
 
 #define SWAP(val1, val2)                                                       \
@@ -54,7 +53,7 @@ static void handler(int sig) {
 }
 
 template <typename T> static __inline T pun(rte_mbuf *pbuf) {
-  char *data = pbuf->buf + sizeof(ipv4_header) + sizeof(udp_header) +
+  char *data = rte_pktmbuf_mtod(pbuf, char*) + sizeof(rte_ipv4_header) + sizeof(rte_udp_header) +
                sizeof(rte_eth_header);
   T ret_data;
   std::memcpy(&ret_data, data, sizeof(T));
@@ -62,13 +61,13 @@ template <typename T> static __inline T pun(rte_mbuf *pbuf) {
 }
 
 template <typename T> static __inline void move_data(rte_mbuf *pbuf, T &data) {
-  char *data_ptr = pbuf->buf + sizeof(ipv4_header) + sizeof(udp_header) +
+  char *data_ptr = rte_pktmbuf_mtod(pbuf, char*) + sizeof(rte_ipv4_header) + sizeof(rte_udp_header) +
                    sizeof(rte_eth_header);
   memcpy(data_ptr, &data, sizeof(T));
 }
 
 template<typename T> static __inline void prefetch(rte_mbuf *pbuf, T& data){
-    rte_prefetch0_write(pbuf->buf + sizeof(ipv4_header) + sizeof(udp_header) + sizeof(rte_eth_header));
+    rte_prefetch0_write(rte_pktmbuf_mtod(pbuf, char*) + sizeof(rte_ipv4_header) + sizeof(rte_udp_header) + sizeof(rte_eth_header));
 }
 
 struct port_config {
@@ -160,9 +159,9 @@ static uint16_t receive_packets_ping(port_config &pconf,
 static int receive_packets_pong(port_config& pconf, rte_mbuf *pkt) {
   if (!verify_packet(pkt))
     return -1;
-  rte_eth_header *eth = reinterpret_cast<rte_eth_header *>(pkt->buf);
-  ipv4_header *ipv4 = reinterpret_cast<ipv4_header *>(eth + 1);
-  udp_header *udp = reinterpret_cast<udp_header *>(ipv4 + 1);
+  rte_eth_header *eth = rte_pktmbuf_mtod(pkt, rte_eth_header*);
+  rte_ipv4_header *ipv4 = reinterpret_cast<rte_ipv4_header *>(eth + 1);
+  rte_udp_header *udp = reinterpret_cast<rte_udp_header *>(ipv4 + 1);
   eth->dst = eth->src;
   eth->src = pconf.app.src;
   SWAP(ipv4->dst_addr, ipv4->src_addr);
@@ -258,7 +257,7 @@ int main(int argc, char *argv[]) {
     pconf.app.sip = inet_addr(sip.c_str());
     pconf.app.dip = inet_addr(dip.c_str());
     pconf.app.dst.parse_string(dmac.c_str());
-    pconf.app.data_len = tu_size - sizeof(ipv4_header) - sizeof(udp_header);
+    pconf.app.data_len = tu_size - sizeof(rte_ipv4_header) - sizeof(rte_udp_header);
     opmode = PING;
   }
   sched::update_disable_reschedule(true);
@@ -280,6 +279,4 @@ int main(int argc, char *argv[]) {
 
   std::cerr << pconf.pool->get_stat() << std::endl;
   close_port(pconf);
-
-  return 0;
 }

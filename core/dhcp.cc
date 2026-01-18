@@ -913,7 +913,7 @@ bool dhcp_buf::decode(){
   _your_ip = ip::address_v4(bytes);
 
   // Parse options
-  u8 *packet_start = reinterpret_cast<u8*>(_m->buf);
+  u8 *packet_start = rte_pktmbuf_mtod(_m, u8*);
   u8 *limit = packet_start + _m->pkt_len;
   u8 *options = poptions();
 

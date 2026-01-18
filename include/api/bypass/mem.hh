@@ -1,17 +1,15 @@
 #ifndef BYPASS_MEM_H
 #define BYPASS_MEM_H
 
-
-
-
 #include "osv/mmu-defs.hh"
 #include "osv/pagealloc.hh"
 #include "osv/virt_to_phys.hh"
-#include <osv/types.h>
-#include <array>
+#include <atomic>
+#include <bypass/util.hh>
 #include <cassert>
-#include <vector>
 #include <cstdint>
+#include <iostream>
+#include <osv/types.h>
 
 #define RTE_MBUF_F_RX_VLAN (1ULL << 0)
 
@@ -67,7 +65,7 @@
 /* add new RX flags here, don't forget to update RTE_MBUF_F_FIRST_FREE */
 
 #define RTE_MBUF_F_FIRST_FREE (1ULL << 23)
-#define RTE_MBUF_F_LAST_FREE (1ULL << 40)
+#define RTE_MBUF_F_LAST_FREE (1ULL << 40) #
 
 /* add new TX flags here, don't forget to update RTE_MBUF_F_LAST_FREE  */
 
@@ -147,8 +145,7 @@
 #define RTE_MBUF_PRIV_ALIGN 8
 
 #define RTE_MBUF_DEFAULT_DATAROOM 2048
-#define RTE_MBUF_DEFAULT_BUF_SIZE                                              \
-  (RTE_MBUF_DEFAULT_DATAROOM + RTE_PKTMBUF_HEADROOM)
+#define RTE_MBUF_DEFAULT_BUF_SIZE (RTE_MBUF_DEFAULT_DATAROOM)
 
 class rte_pktmbuf_pool;
 struct rte_mbuf;
@@ -157,69 +154,153 @@ template <typename T, T alignment> static constexpr T align(T val) {
   return (val + alignment - 1) & ~(alignment - 1);
 }
 
+#define rte_free free
+
 void rte_pktmbuf_free(rte_mbuf *mbuf);
 void rte_mbuf_raw_free(rte_mbuf *mbuf);
 void rte_pktmbuf_free_bulk(rte_mbuf **pkts, uint16_t size);
 void rte_pktmbuf_read(rte_mbuf *, uint32_t, uint32_t, uint8_t *);
 
 struct rte_mbuf {
-  uint16_t l2_len, l3_len, l4_len, nb_segs, packet_type;
-  uint16_t pkt_len, data_len, buf_len;
+  // next in chain
+  rte_mbuf *next;
+
+  // address of the mbuf structure
+  char *buf_addr;
+
+  // timestamp
+  uint64_t ts;
+
+  // application private data
+  void *priv;
+
+  // memory pool allocated from
+  rte_pktmbuf_pool *pool;
+
+  // NIC offload flags
   uint64_t ol_flags;
+
+  // IO Virtual Address
   uintptr_t iova;
+
+  // rss hash
   struct {
     uint64_t rss;
   } hash;
-  rte_pktmbuf_pool *pool;
-  rte_mbuf *next;
-  char *buf;
+
+  // offset of the dataroom
+  uint16_t data_offset;
+
+  // size of the packet(chained)
+  // size of the used fraction of the dataroom
+  // total length of the buffer
+  uint16_t pkt_len, data_len, buf_len;
+
+  // reference count
+  std::atomic<uint16_t> refcnt;
+
+  // length of the l2 header
+  // length of the l3 header
+  // length of the l4 header
+  // number of segments in the chain
+  uint16_t l2_len, l3_len, l4_len, nb_segs;
+
+  // type of the packet
+  uint32_t packet_type;
+
+  template <typename T> void headroom_adj() {
+    assert(data_offset + sizeof(T) < buf_len);
+    data_offset += sizeof(T);
+    pkt_len -= sizeof(T);
+    data_len -= sizeof(T);
+  }
+
+  template <typename T> T *prepend() {
+    data_offset -= sizeof(T);
+    pkt_len += sizeof(T);
+    data_len += sizeof(T);
+    return reinterpret_cast<T *>(buf_addr + data_offset);
+  }
 };
 
-#define rte_pktmbuf_mtod(m, t) reinterpret_cast<t>(m->buf)
-#define rte_free free
+#define rte_pktmbuf_mtod(m, t) reinterpret_cast<t>(m->buf_addr + m->data_offset)
 
 using rte_mempool = rte_pktmbuf_pool;
 struct pageheader {
   pageheader *next;
   uintptr_t phys;
-  char page[];
 };
 
 template <typename T> struct objheader {
   objheader *next;
   T obj;
 };
+template <typename Obj> struct Pool {
+  static constexpr uint16_t kMaxHeadRoomSize = 256;
+  static constexpr uint16_t kOffsetInHugePage = sizeof(pageheader);
+  using element_type = Obj;
 
-struct Pool {
   pageheader *memory;
-  objheader<rte_mbuf> *objs;
+  objheader<element_type> *objs;
   uint64_t elems, inuse, alloc_size;
 
   Pool(uint32_t size, uint32_t elems)
       : memory(nullptr), objs(nullptr), elems(elems), inuse(0) {
-    alloc_size = align<uint64_t, 64>(size + sizeof(objheader<rte_mbuf>));
-    const uint32_t per_page = mmu::huge_page_size - sizeof(pageheader);
-    uint32_t offset = per_page;
+    alloc_size = align<uint64_t, RTE_CACHE_LINE_SIZE>(
+        size + kMaxHeadRoomSize + sizeof(objheader<element_type>));
+    uint32_t offset = mmu::huge_page_size;
     for (uint32_t i = 0; i < elems; ++i) {
-      if (per_page - offset < alloc_size) {
+      if (mmu::huge_page_size - offset < alloc_size) {
         auto *page = static_cast<pageheader *>(
             memory::alloc_huge_page(mmu::huge_page_size));
-        offset = 0;
+        offset = kOffsetInHugePage;
         page->next = memory;
         memory = page;
-        page->phys = mmu::virt_to_phys(page) + sizeof(pageheader);
+        page->phys = mmu::virt_to_phys(page);
+        assert((memory->phys & (mmu::huge_page_size - 1)) == 0);
+        std::cerr << page->phys << std::endl;
       }
-      assert(memory && ((memory->phys - sizeof(pageheader)) & (mmu::huge_page_size - 1)) == 0);
-      auto *obj =
-          reinterpret_cast<objheader<rte_mbuf> *>(memory->page + offset);
-      new (&obj->obj) rte_mbuf{};
-      obj->obj.iova = memory->phys + offset + sizeof(objheader<rte_mbuf>);
-      obj->obj.buf_len = size;
+
+      auto *data = reinterpret_cast<char *>(memory) + offset;
+      auto *obj = reinterpret_cast<objheader<element_type> *>(data);
+      new (&obj->obj) element_type{};
+      obj->obj.buf_len = alloc_size;
+      obj->obj.buf_addr = reinterpret_cast<char *>(&obj->obj);
+      obj->obj.data_offset = sizeof(element_type) + kMaxHeadRoomSize;
+      obj->obj.iova = memory->phys + offset + sizeof(objheader<element_type>) +
+                      kMaxHeadRoomSize;
       obj->next = objs;
+      std::cerr << obj->obj.buf_len << ", " << reinterpret_cast<uintptr_t>(obj->obj.buf_addr) << ", " <<   obj->obj.iova << 
+          ", "<< sizeof(objheader<element_type>) <<std::endl;
       objs = obj;
       offset += alloc_size;
     }
   }
+
+  void put(element_type *obj) {
+    objheader<element_type> *header =
+        reinterpret_cast<objheader<element_type> *>(
+            reinterpret_cast<uint8_t *>(obj) -
+            offsetof(objheader<element_type>, obj));
+    header->next = objs;
+    objs = header;
+    ++elems;
+    --inuse;
+  }
+
+  uint32_t can_alloc(uint32_t n) { return n <= elems; }
+
+  int get(element_type **elems, uint32_t n) {
+    assert(can_alloc(n));
+    for (uint32_t i = 0; i < n; ++i) {
+      elems[i] = &objs->obj;
+      objs = objs->next;
+    }
+    elems -= n;
+    inuse += n;
+    return 0;
+  }
+
   ~Pool() {
     for (auto *it = memory; it;) {
       auto *to_free = it;
@@ -228,13 +309,14 @@ struct Pool {
     }
   }
 };
+
 class rte_pktmbuf_pool {
   static constexpr uint32_t cache_size = 256;
 
 public:
   rte_pktmbuf_pool(const char *name, uint32_t size, uint32_t elems,
                    uint32_t flags)
-      : pool(size, elems), data_size(elems) {
+      : pool_impl(size, elems), data_size(elems) {
     (void)name;
     (void)flags;
   }
@@ -257,50 +339,13 @@ public:
   uint32_t get_data_size() const { return data_size; }
 
   template <typename F> void init(F &&fun) {
-    for (auto &m : pool.header)
-      fun(m);
+    auto *obj = pool_impl.objs;
+    for (; obj; obj = obj->next)
+      fun(&obj->obj);
   }
 
 private:
-  struct PoolImpl {
-    static constexpr uint32_t cl_size = 64;
-    std::vector<rte_mbuf *> header;
-    pageheader *pages;
-    uint64_t head;
-    PoolImpl(uint32_t size, uint32_t elems)
-        : header(elems, nullptr), pages(nullptr), head(0) {
-      uint64_t offset = mmu::huge_page_size;
-      uint64_t alloc_size = align<uint64_t, 64>(sizeof(rte_mbuf) + size); 
-      uint32_t i = 0;
-      for (auto &m : header) {
-        if(mmu::huge_page_size - offset < alloc_size){
-            auto *page = memory::alloc_huge_page(mmu::huge_page_size);
-            auto *header = static_cast<pageheader*>(page);
-            header->next = pages;
-            header->phys = mmu::virt_to_phys(page);
-            assert(header->phys != 0);
-            pages = header;
-            offset = sizeof(pageheader);
-        }  
-        auto *data = reinterpret_cast<char*>(pages);
-        m = reinterpret_cast<rte_mbuf*>(data + offset);
-        m->buf = data + offset + sizeof(rte_mbuf);
-        m->iova = pages->phys + offset + sizeof(rte_mbuf);
-        ++i;
-        offset += alloc_size;
-      }
-    }
-    rte_mbuf *get() { return header[head++]; }
-    void put(rte_mbuf *m) { header[--head] = m; }
-    bool can(uint16_t nb) { return (header.size() - head) >= nb; }
-    ~PoolImpl() {
-        for(auto *it = pages; it; ){
-            auto *header = it;
-            it = it->next;
-            memory::free_huge_page(header, mmu::huge_page_size);
-        }
-    }
-  } pool;
+  Pool<rte_mbuf> pool_impl;
   uint32_t data_size;
   uint64_t malloc_stat = 0;
 };

@@ -2,12 +2,14 @@
 #define BYPASS_UTIL_H
 
 #include "osv/mmio.hh"
+#include "osv/types.h"
 #include <atomic>
 #include <cstdint>
 #include <features.h>
-#include <machine/atomic.h>
 #include <osv/spinlock.h>
 #include <osv/irqlock.hh>
+#include <sys/types.h>
+#include "machine/atomic.h"
 
 #define rte_wmb wmb
 #define rte_rmb rmb

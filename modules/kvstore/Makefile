@@ -1,10 +1,10 @@
 include ../common.gmk
 
-CXXFLAGS=-O3 -g -Wall -std=c++20 -fPIC $(COMMON)
-LDFLAGS += $(pkg-config tbb --libs --static)
+CXXFLAGS=-O3 -g -Wall -std=c++20 -fPIC $(COMMON) -ltbb
+LDFLAGS += -ltbb 
 SRCS=$(wildcard *.cc)
 OBJS=$(SRCS:.cc=.o)
-LIBS=-lyaml-cpp
+LIBS=-lyaml-cpp -ltbb
 
 .PHONY: module
 module: kvstore.so

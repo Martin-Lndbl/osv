@@ -18,7 +18,6 @@
 #include <api/bypass/bit.hh>
 #include <api/bypass/defs.hh>
 #include <api/bypass/dev.hh>
-#include <api/bypass/dev_flag.hh>
 #include <api/bypass/mem.hh>
 #include <api/bypass/rss.hh>
 #include <api/bypass/time.hh>

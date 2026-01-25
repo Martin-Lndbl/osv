@@ -1,14 +1,24 @@
 
+#include <arpa/inet.h>
+#include <bypass/fastt/connection.hh>
+#include <bypass/fastt/iface.hh>
+#include <bypass/fastt/message.hh>
+#include <bypass/fastt/server.hh>
+#include <bypass/fastt/util.hh>
 #include <bypass/mem.hh>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <memory>
-#include <oneapi/tbb/concurrent_hash_map.h>
-
+#include <osv/lockless-queue.hh>
+#include <tbb/concurrent_hash_map.h>
+#include <thread>
+#include <unistd.h>
 #include <yaml-cpp/yaml.h>
 
 #include "kvstore_def.hh"
+#include "lockfree/ring.hh"
 
 #define PUN(target, elem)                                                      \
   do {                                                                         \
@@ -92,62 +102,82 @@ private:
   }
 };
 
-static void process_request(kvstore &store, kv_packet<kv_request> *request,
+static void process_request(kvstore &store,
+                            const kv_packet<kv_request> *request,
                             kv_packet<kv_completion> *response) {
   response->pt = packet_t::SINGLE;
   response->payload = store.serve_request(request->payload);
 }
 
-static void process_request(kvstore &store, kv_batch<kv_request> *request,
-                            kv_batch<kv_completion> *response) {
-  response->pt = packet_t::BATCH;
-  response->elems = request->elems;
-  for (auto i = 0u; i < response->elems; ++i)
-    response->elements[i] = store.serve_request(request->elements[i]);
-}
-
 struct worker_interface {
-  worker_interface(std::shared_ptr<kvstore> store, std::size_t burst)
-      : requests(burst), responses(burst), store(std::move(store)) {}
-  void process_packets(rte_mempool *pool) {
-    auto space = std::min(responses.size(), requests.size());
-    if (pool->alloc_bulk(responses.data(), requests.size()))
-      return;
+  template <typename T> using queue_t = ring_spsc<T, unsigned, 64u>;
+  worker_interface(std::shared_ptr<kvstore> store, message_allocator *allocator)
+      : allocator(allocator), store(std::move(store)) {}
 
-    for (auto i = 0u; i < space; ++i) {
-      auto *base =
-          reinterpret_cast<kv_packet_base *>(requests[i]->buf + payload_offset);
-      auto *repsonse_base = reinterpret_cast<kv_packet_base *>(
-          responses[i]->buf + payload_offset);
-      switch (base->pt) {
-      case packet_t::SINGLE:
-        process_request(*store, static_cast<kv_packet<kv_request> *>(base),
-                        static_cast<kv_packet<kv_completion> *>(repsonse_base));
-        break;
-      case packet_t::BATCH:
-        process_request(*store, static_cast<kv_batch<kv_request> *>(base),
-                        static_cast<kv_batch<kv_completion> *>(repsonse_base));
-        break;
-      }
+  void process_packets() {
+    while (rx_ring.empty())
+      pause();
+    auto &req = rx_ring.front();
+    kv_packet<kv_completion> resp;
+    switch (req.first.pt) {
+    case packet_t::SINGLE:
+      process_request(*store, &req.first, &resp);
+      break;
+    default:
+      return;
     }
+    tx_ring.push({resp, req.second});
   }
-  std::vector<rte_mbuf *> requests, responses;
+  message_allocator *allocator;
   std::shared_ptr<kvstore> store;
+  queue_t<std::pair<kv_packet<kv_request>, connection *>> rx_ring;
+  queue_t<std::pair<kv_packet<kv_completion>, connection *>> tx_ring;
 };
 
 int main() {
-  static constexpr uint16_t burst = 32;
   std::string addr;
-  uint16_t pmin, pmax;
-  uint32_t initial_size;
-  std::cin >> addr >> pmin >> pmax >> initial_size;
-  std::shared_ptr<kvstore> store = std::make_shared<kvstore>(initial_size);
-  std::size_t tidx = 0;
-  worker_interface kv_if(store, burst);
-  auto worker = [kv_if = std::move(kv_if)] () mutable {
+  std::cin >> addr;
+  uint32_t sip = inet_addr(addr.c_str());
+  auto ifc = iface::configure_port(0, 1, 1);
+  std::shared_ptr<kvstore> store = std::make_shared<kvstore>(1024);
+  auto dev = ifc->get_slice(0);
+  std::shared_ptr<message_allocator> allocator =
+      std::make_shared<message_allocator>("pool", 8095);
+  server_iface server(ifc->eth_dev, 1, 1, con_config{sip, 1000}, allocator);
 
-
+  worker_interface kv_if(store, allocator.get());
+  auto network_thread = [&allocator](server_iface &server,
+                                     worker_interface &worker) {
+    poll_state<32> ps;
+    uint16_t del_cnt = 0;
+    while (true) {
+      auto events = server.poll(ps);
+      for (uint16_t i = 0; i < events; ++i) {
+        message *msg;
+        auto *con = ps.events[i];
+        if (con->receive_message(&msg, 1)) {
+          con->acknowledge_all();
+          worker.rx_ring.push(
+              {*static_cast<kv_packet<kv_request> *>(msg->data()), con});
+          rte_pktmbuf_free(msg);
+        }
+      }
+      while (!worker.tx_ring.empty() && del_cnt < 32) {
+        auto resp = worker.tx_ring.front();
+        auto *msg = allocator->alloc_message(sizeof(kv_packet<kv_completion>));
+        memcpy(msg->data(), &resp, sizeof(resp));
+        resp.second->send_message(msg, msg->len());
+        ++del_cnt;
+      }
+      server.accept();
+      server.flush();
+    }
   };
-  worker();
+  auto worker = std::thread([&]() {
+    while (true)
+      kv_if.process_packets();
+  });
+  network_thread(server, kv_if);
+  worker.join();
   return 0;
 }

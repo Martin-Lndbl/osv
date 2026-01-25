@@ -79,7 +79,7 @@ public:
 
 private:
   // Pointers for building DHCP packet
-  ip *pip() { return reinterpret_cast<ip *>(rte_pktmbuf_mtod(_m, char*) + sizeof(rte_eth_header)); }
+  ip *pip() { return reinterpret_cast<ip *>(rte_pktmbuf_mtod(_m, char*) + sizeof(rte_ether_hdr)); }
   udphdr *pudp() { return reinterpret_cast<udphdr *>(pip() + 1); }
   dhcp::dhcp_packet *pdhcp() {
     return reinterpret_cast<dhcp::dhcp_packet *>(pudp() + 1);
@@ -103,13 +103,13 @@ private:
   }
 
   void build_eth_ip_headers(rte_ether_addr &src, rte_ether_addr &dst) {
-    auto *eth = rte_pktmbuf_mtod(_m, rte_eth_header*);
-    eth->src = src;
-    eth->dst = dst;
+    auto *eth = rte_pktmbuf_mtod(_m, rte_ether_hdr*);
+    eth->src_addr = src;
+    eth->dst_addr = dst;
     eth->ether_type = htons(0x0800);
-    _m->pkt_len += sizeof(rte_eth_header);
-    _m->data_len += sizeof(rte_eth_header);
-    _m->l2_len = sizeof(rte_eth_header);
+    _m->pkt_len += sizeof(rte_ether_hdr);
+    _m->data_len += sizeof(rte_ether_hdr);
+    _m->l2_len = sizeof(rte_ether_hdr);
     _m->nb_segs = 1;
   }
 
@@ -212,7 +212,7 @@ struct dhcp_handler {
   }
 
   int process_packet(rte_mbuf *pkt) {
-    auto *eth = rte_pktmbuf_mtod(pkt, rte_eth_header*);
+    auto *eth = rte_pktmbuf_mtod(pkt, rte_ether_hdr*);
     if(eth->ether_type != htons(0x0800)){
         dhcp_log("Got wrong ether type: %x", ntohs(eth->ether_type));
         return -EAGAIN;

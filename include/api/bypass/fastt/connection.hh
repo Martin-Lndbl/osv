@@ -1,0 +1,164 @@
+#pragma once
+
+#include <bypass/dev.hh>
+#include <cstdint>
+#include <endian.h>
+#include <memory>
+#include <optional>
+
+
+#include "netdev.hh"
+#include "log.hh"
+#include "message.hh"
+#include "packet_if.hh"
+#include "protocol.hh"
+#include "transport/transport.hh"
+#include "util.hh"
+
+class iface;
+class connection;
+
+template <int N> struct poll_state {
+  std::array<connection *, N> events;
+};
+
+class connection {
+public:
+  connection(message_allocator *allocator, packet_if *pkt_if,
+             const con_config &target, uint16_t sport)
+      : allocator(allocator), transport_impl(new transport(
+                                  allocator, pkt_if, sport, target)) {}
+  void process_pkt(rte_mbuf *pkt);
+  bool send_message(message *msg, uint16_t len);
+  void acknowledge_all();
+  void accept();
+  uint16_t receive_message(message **msgs, uint16_t cnt);
+  void open_connection();
+  bool poll() const { return has_ready_message(); }
+  bool active() { return transport_impl->active(); }
+
+private:
+  friend class connection_manager;
+  bool has_ready_message() const;
+  message_allocator *allocator;
+  std::unique_ptr<transport> transport_impl;
+
+public:
+  connection() = default;
+  connection *next;
+  connection *prev;
+};
+
+class connection_manager {
+  static constexpr uint16_t kdefaultBurstSize = 32;
+  static constexpr uint16_t kdefaultFlowTableSize = 512;
+
+public:
+  connection_manager(rte_eth_dev* eth_dev, uint16_t txq, uint16_t rxq, uint32_t sip,
+                     std::shared_ptr<message_allocator> allocator)
+      : flows(kdefaultFlowTableSize), allocator(allocator), dev(eth_dev, txq, rxq),
+        scheduler(&dev), pkt_if(&scheduler, sip, eth_dev) {
+    head.next = &tail;
+    head.prev = nullptr;
+    tail.next = nullptr;
+    tail.prev = &head;
+  }
+
+  void handle_pkt(message *pkt, flow_tuple &ft) {
+    FASTT_LOG_DEBUG("Got new pkt from: %d, %d\n", ft.sip,
+                    htobe16(ft.sport));
+    auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
+    if (header->type == protocol::FT_INIT)
+      register_request(pkt, ft);
+    else {
+      auto *connection = flows.lookup(ft);
+      if (connection)
+        connection->process_pkt(pkt);
+      else {
+        dump_pkt(pkt, pkt->len());
+        rte_pktmbuf_free(pkt);
+      }
+    }
+  }
+
+  void add_mac(uint32_t ip, rte_ether_addr &mac) {
+    pkt_if.add_mapping(ip, mac);
+  }
+
+  connection *open_connection(const con_config &source,
+                              const con_config &target) {
+    flow_tuple ft{target.ip, source.ip, htobe16(target.port),
+                  htobe16(source.port)};
+    FASTT_LOG_DEBUG("Opened new connection to %d %d\n", ft.sip,
+                    htobe16(ft.sport));
+    auto [it, inserted] =
+        flows.emplace(ft, allocator.get(), &pkt_if, target, source.port);
+    if (!inserted)
+      return nullptr;
+    it->open_connection();
+    intrusive_push_front(head, it);
+    assert(head.next == it);
+    flush();
+    return it;
+  }
+
+  template <int N> uint16_t poll(poll_state<N> &events) {
+    fetch_from_device();
+    uint16_t i = 0;
+    for (auto it = head.next, end = &tail; i < N && it != end; ++it) {
+      if (it->poll())
+        events.events[i++] = it;
+    }
+    return i;
+  }
+
+  void fetch_from_device() {
+    dev.rx_burst([this](message *pkt) {
+      flow_tuple ft;
+      auto *msg = pkt_if.consume_pkt(pkt, ft);
+      if (!msg)
+        return;
+      handle_pkt(pkt, ft);
+    });
+  }
+
+  void register_request(message *pkt, flow_tuple &ft) {
+    FASTT_LOG_DEBUG("Registering new request");
+    connection_requests.emplace_back(pkt, ft);
+  }
+
+  connection *accept_connection() {
+    if (connection_requests.empty())
+      return nullptr;
+    auto [pkt, ft] = connection_requests.front();
+    auto [con, inserted] = add_connection(ft, htobe16(ft.dport));
+    connection_requests.pop_front();
+    con->process_pkt(pkt);
+    if (inserted) {
+      con->accept();
+      FASTT_LOG_DEBUG("Added new connection from %u %d\n", ft.sip, ft.sport);
+      assert(head.next == con);
+    }
+    return con;
+  }
+  std::pair<connection *, bool> add_connection(const flow_tuple &tuple,
+                                               uint16_t port) {
+    auto [it, inserted] = flows.emplace(
+        tuple, allocator.get(), &pkt_if,
+        con_config{tuple.sip, htobe16(tuple.sport)}, port);
+    if (inserted)
+      intrusive_push_front(head, it);
+    return {it, inserted};
+  }
+
+  void flush() { scheduler.flush(); }
+
+private:
+  std::deque<std::pair<message *, flow_tuple>> connection_requests;
+  fixed_size_hash_table<flow_tuple, connection> flows;
+  std::shared_ptr<message_allocator> allocator;
+  netdev dev;
+  packet_scheduler scheduler;
+  packet_if pkt_if;
+  connection head, tail;
+};

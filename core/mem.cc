@@ -87,3 +87,12 @@ void rte_pktmbuf_pool::free_bulk(struct rte_mbuf** pkts, uint16_t nb){
         if(--pkts[i]->refcnt)
             pool_impl.put(pkts[i]);
 }
+
+rte_mbuf* rte_pktmbuf_pool::alloc_mbuf(){
+    rte_mbuf* pkt;
+    if(pool_impl.can_alloc(1)){
+        pool_impl.get(&pkt, 1);
+        return pkt;
+    }
+    return nullptr;
+}

@@ -208,11 +208,11 @@ struct rte_mbuf {
   // type of the packet
   uint32_t packet_type;
 
-  template <typename T> void headroom_adj() {
-    assert(data_offset + sizeof(T) < buf_len);
-    data_offset += sizeof(T);
-    pkt_len -= sizeof(T);
-    data_len -= sizeof(T);
+  void headroom_adj(uint32_t size) {
+    assert(data_offset + size < buf_len);
+    data_offset += size;
+    pkt_len -= size;
+    data_len -= size;
   }
 
   template <typename T> T *prepend() {
@@ -236,7 +236,7 @@ template <typename T> struct objheader {
   T obj;
 };
 template <typename Obj> struct Pool {
-  static constexpr uint16_t kMaxHeadRoomSize = 256;
+  static constexpr uint16_t kMaxHeadRoomSize = 128;
   static constexpr uint16_t kOffsetInHugePage = sizeof(pageheader);
   using element_type = Obj;
 
@@ -258,7 +258,6 @@ template <typename Obj> struct Pool {
         memory = page;
         page->phys = mmu::virt_to_phys(page);
         assert((memory->phys & (mmu::huge_page_size - 1)) == 0);
-        std::cerr << page->phys << std::endl;
       }
 
       auto *data = reinterpret_cast<char *>(memory) + offset;
@@ -270,8 +269,7 @@ template <typename Obj> struct Pool {
       obj->obj.iova = memory->phys + offset + sizeof(objheader<element_type>) +
                       kMaxHeadRoomSize;
       obj->next = objs;
-      std::cerr << obj->obj.buf_len << ", " << reinterpret_cast<uintptr_t>(obj->obj.buf_addr) << ", " <<   obj->obj.iova << 
-          ", "<< sizeof(objheader<element_type>) <<std::endl;
+
       objs = obj;
       offset += alloc_size;
     }

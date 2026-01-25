@@ -9,10 +9,11 @@
 
 #define RTE_ETHER_ADDR_LEN 6
 
-static constexpr uint16_t IPV4 = 0x0800;
 static constexpr uint8_t VERSION = 4;
 static constexpr uint8_t VERSION_IHL = ((VERSION << 4) | 0x5);
 static constexpr uint8_t TTL = 64;
+static constexpr uint8_t RTE_ETHER_TYPE_IPV4 = 0x800;
+static constexpr uint8_t RTE_IPPROTO_UDP = 17;
 
 struct rte_ether_addr {
   std::array<unsigned char, RTE_ETHER_ADDR_LEN> addr;
@@ -24,13 +25,17 @@ struct rte_ether_addr {
   static rte_ether_addr broadcast;
 };
 
-struct [[gnu::packed]] rte_eth_header {
-  rte_ether_addr dst;
-  rte_ether_addr src;
+inline void rte_ether_addr_copy(const rte_ether_addr* src, rte_ether_addr* to){
+    *to = *src;
+}
+
+struct [[gnu::packed]] rte_ether_hdr {
+  rte_ether_addr dst_addr;
+  rte_ether_addr src_addr;
   uint16_t ether_type;
 };
 
-struct [[gnu::packed]] rte_ipv4_header {
+struct [[gnu::packed]] rte_ipv4_hdr {
   uint8_t version_ihl;
   uint8_t type_of_service;
   uint16_t total_length;
@@ -43,7 +48,7 @@ struct [[gnu::packed]] rte_ipv4_header {
   uint32_t dst_addr;
 };
 
-struct [[gnu::packed]] rte_udp_header {
+struct [[gnu::packed]] rte_udp_hdr {
   uint16_t src_port;
   uint16_t dst_port;
   uint16_t dgram_len;
@@ -88,7 +93,7 @@ inline uint16_t _raw_cksum_reduce(uint32_t sum) {
   return (uint16_t)sum;
 }
 
-inline uint16_t phdr_cksum(rte_ipv4_header *ipv4, rte_udp_header *udp) {
+inline uint16_t phdr_cksum(rte_ipv4_hdr *ipv4, rte_udp_hdr *udp) {
   struct ipv4_psd_header {
     uint32_t src_addr; /* IP address of source host. */
     uint32_t dst_addr; /* IP address of destination host. */

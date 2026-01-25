@@ -75,7 +75,7 @@ struct rte_eth_txconf{
 };
 
 struct rte_eth_rxconf{
-        enum rte_eth_tx_mq_mode mq_mode;
+        enum rte_eth_rx_mq_mode mq_mode;
         uint64_t offloads;
         uint64_t rx_free_thresh;
 };
@@ -114,8 +114,8 @@ struct rte_eth_dev_info {
     uint8_t hash_key_size; 
     uint32_t rss_algo_capa; 
     uint64_t flow_type_rss_offloads;
-    struct rte_eth_rxconf default_rxconf; 
-    struct rte_eth_txconf default_txconf; 
+    rte_eth_rxconf default_rxconf; 
+    rte_eth_txconf default_txconf; 
     uint16_t vmdq_queue_base; 
     uint16_t vmdq_queue_num;  
     uint16_t vmdq_pool_base; 

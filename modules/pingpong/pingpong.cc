@@ -53,21 +53,21 @@ static void handler(int sig) {
 }
 
 template <typename T> static __inline T pun(rte_mbuf *pbuf) {
-  char *data = rte_pktmbuf_mtod(pbuf, char*) + sizeof(rte_ipv4_header) + sizeof(rte_udp_header) +
-               sizeof(rte_eth_header);
+  char *data = rte_pktmbuf_mtod(pbuf, char*) + sizeof(rte_ipv4_hdr) + sizeof(rte_udp_hdr) +
+               sizeof(rte_ether_hdr);
   T ret_data;
   std::memcpy(&ret_data, data, sizeof(T));
   return ret_data;
 }
 
 template <typename T> static __inline void move_data(rte_mbuf *pbuf, T &data) {
-  char *data_ptr = rte_pktmbuf_mtod(pbuf, char*) + sizeof(rte_ipv4_header) + sizeof(rte_udp_header) +
-                   sizeof(rte_eth_header);
+  char *data_ptr = rte_pktmbuf_mtod(pbuf, char*) + sizeof(rte_ipv4_hdr) + sizeof(rte_udp_hdr) +
+                   sizeof(rte_ether_hdr);
   memcpy(data_ptr, &data, sizeof(T));
 }
 
 template<typename T> static __inline void prefetch(rte_mbuf *pbuf, T& data){
-    rte_prefetch0_write(rte_pktmbuf_mtod(pbuf, char*) + sizeof(rte_ipv4_header) + sizeof(rte_udp_header) + sizeof(rte_eth_header));
+    rte_prefetch0_write(rte_pktmbuf_mtod(pbuf, char*) + sizeof(rte_ipv4_hdr) + sizeof(rte_udp_hdr) + sizeof(rte_ether_hdr));
 }
 
 struct port_config {
@@ -159,11 +159,11 @@ static uint16_t receive_packets_ping(port_config &pconf,
 static int receive_packets_pong(port_config& pconf, rte_mbuf *pkt) {
   if (!verify_packet(pkt))
     return -1;
-  rte_eth_header *eth = rte_pktmbuf_mtod(pkt, rte_eth_header*);
-  rte_ipv4_header *ipv4 = reinterpret_cast<rte_ipv4_header *>(eth + 1);
-  rte_udp_header *udp = reinterpret_cast<rte_udp_header *>(ipv4 + 1);
-  eth->dst = eth->src;
-  eth->src = pconf.app.src;
+  rte_ether_hdr *eth = rte_pktmbuf_mtod(pkt, rte_ether_hdr*);
+  rte_ipv4_hdr *ipv4 = reinterpret_cast<rte_ipv4_hdr *>(eth + 1);
+  rte_udp_hdr *udp = reinterpret_cast<rte_udp_hdr *>(ipv4 + 1);
+  eth->dst_addr = eth->src_addr;
+  eth->src_addr = pconf.app.src;
   SWAP(ipv4->dst_addr, ipv4->src_addr);
   SWAP(udp->dst_port, udp->src_port);
   udp->dgram_cksum = 0;
@@ -239,7 +239,7 @@ static void do_pong(port_config &pconf) {
 }
 
 enum mode { PING, PONG };
-static constexpr uint16_t tu_size = 60 - sizeof(rte_eth_header);
+static constexpr uint16_t tu_size = 60 - sizeof(rte_ether_hdr);
 
 int main(int argc, char *argv[]) {
   struct sigaction sa{};
@@ -257,7 +257,7 @@ int main(int argc, char *argv[]) {
     pconf.app.sip = inet_addr(sip.c_str());
     pconf.app.dip = inet_addr(dip.c_str());
     pconf.app.dst.parse_string(dmac.c_str());
-    pconf.app.data_len = tu_size - sizeof(rte_ipv4_header) - sizeof(rte_udp_header);
+    pconf.app.data_len = tu_size - sizeof(rte_ipv4_hdr) - sizeof(rte_udp_hdr);
     opmode = PING;
   }
   sched::update_disable_reschedule(true);

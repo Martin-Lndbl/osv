@@ -1,4 +1,4 @@
-#include <bypass/fastt/log.hh>
+#include <bypass/fastt/debug.hh>
 #include <bypass/fastt/message.hh>
 
 void dump_pkt(message *msg, uint16_t len) {

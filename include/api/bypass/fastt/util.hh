@@ -5,6 +5,18 @@
 #include <utility>
 #include <vector>
 
+#include <boost/intrusive/list.hpp>
+
+namespace bi = boost::intrusive;
+
+using list_hook = bi::list_member_hook<bi::link_mode<bi::link_mode_type::auto_unlink>>;
+
+template<typename T, list_hook T::*link  = &T::link>
+using intrusive_list_t = bi::list<T, bi::member_hook<T, list_hook, link>, bi::constant_time_size<false>>;
+
+__inline constexpr std::pair<unsigned, unsigned> get_bit_indices_64(unsigned i){
+    return {i / 64, i & 63};
+}
 //-------------------------------------------------------------------------------
 /*
  *  Taken from linux kernel

@@ -224,6 +224,7 @@ struct rte_mbuf {
 };
 
 #define rte_pktmbuf_mtod(m, t) reinterpret_cast<t>(m->buf_addr + m->data_offset)
+#define rte_pktmbuf_mtod_offset(m, t, o) reinterpret_cast<t>(m->buf_addr + m->data_offset + o)
 
 using rte_mempool = rte_pktmbuf_pool;
 struct pageheader {

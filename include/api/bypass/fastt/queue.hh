@@ -4,9 +4,10 @@
 template<typename T>
 using Identity = T;
 
-template <typename T, template <typename> typename P = Identity> class queue_base {
+template <typename T, template <typename> class P = Identity> class queue_base {
 public:
   queue_base(std::size_t size) : storage(size), capacity(size), mask(size - 1) {}
+
   template<typename ...Args>
   T* enqueue(Args&& ...args){
       if(head == ((tail + 1) & mask))
@@ -36,6 +37,7 @@ public:
   }
 
   T& operator[](std::size_t i){
+      assert(i < size());
       return storage[(head + i) & mask];
   }
 

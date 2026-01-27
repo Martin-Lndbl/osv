@@ -175,6 +175,7 @@ struct rte_eth_dev{
     virtual void get_stats(rte_eth_stats *stats) = 0;
     void dev_configure(uint16_t nb_tx, uint16_t nb_rx, rte_eth_conf *conf);
     virtual int get_dev_info(rte_eth_dev_info *info) = 0;
+    virtual int rss_reta_update(rte_eth_rss_reta_entry64* reta, uint16_t reta_size) = 0;
 };
 
 struct eth_dev_info{

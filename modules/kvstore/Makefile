@@ -1,10 +1,9 @@
 include ../common.gmk
 
-CXXFLAGS=-O3 -g -Wall -std=c++20 -fPIC $(COMMON) -ltbb
-LDFLAGS += -ltbb 
+CXXFLAGS=-O3 -g -Wall -std=c++20 -fPIC $(COMMON)
 SRCS=$(wildcard *.cc)
 OBJS=$(SRCS:.cc=.o)
-LIBS=-lyaml-cpp -ltbb
+LIBS=-lyaml-cpp 
 
 .PHONY: module
 module: kvstore.so

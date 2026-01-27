@@ -1,7 +1,7 @@
 include ../common.gmk
 
-TARGET=FASTT_LIB
 CXXFLAGS=-O3 -g -Wall -std=c++17 -fPIC $(COMMON) 
+SRCS=$(wildcard *.cc)
 
 .PHONY: module
 module: pingpong.so

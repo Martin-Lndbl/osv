@@ -1,6 +1,6 @@
 #pragma once
 
-#include "log.hh"
+#include "debug.hh"
 #include "message.hh"
 #include "packet_scheduler.hh"
 #include "util.hh"

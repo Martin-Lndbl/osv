@@ -1172,11 +1172,11 @@ objects += core/net.o
 objects += core/fastt/client.o
 objects += core/fastt/connection.o
 objects += core/fastt/iface.o
-objects += core/fastt/log.o
+objects += core/fastt/debug.o
 objects += core/fastt/packet_scheduler.o
 objects += core/fastt/protocol.o
-objects += core/fastt/server.o
 objects += core/fastt/util.o
+objects += core/fastt/kv.o
 #include $(src)/libc/build.mk:
 libc =
 libc_to_hide =

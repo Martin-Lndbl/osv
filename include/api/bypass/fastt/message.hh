@@ -1,5 +1,5 @@
 #pragma once
-#include "log.hh"
+#include "debug.hh"
 
 #include <cstddef>
 #include <cstdint>
@@ -48,7 +48,8 @@ public:
     assert(data_size < payload_size);
     if (data_size >= payload_size - kRequiredHeadRoom)
       return nullptr;
-    auto *mbuf = pool->alloc_mbuf();
+    rte_mbuf* mbuf;
+    pool->alloc_bulk(&mbuf, 1);
     return prepare(mbuf, data_size);
   }
 

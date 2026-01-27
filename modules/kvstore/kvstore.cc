@@ -2,8 +2,10 @@
 #include <arpa/inet.h>
 #include <bypass/fastt/connection.hh>
 #include <bypass/fastt/iface.hh>
+#include <bypass/fastt/kv.hh>
 #include <bypass/fastt/message.hh>
 #include <bypass/fastt/server.hh>
+#include <bypass/fastt/transport/slot.hh>
 #include <bypass/fastt/util.hh>
 #include <bypass/mem.hh>
 #include <cstddef>
@@ -12,12 +14,10 @@
 #include <iostream>
 #include <memory>
 #include <osv/lockless-queue.hh>
-#include <tbb/concurrent_hash_map.h>
-#include <thread>
 #include <unistd.h>
+#include <unordered_map>
 #include <yaml-cpp/yaml.h>
 
-#include "kvstore_def.hh"
 #include "lockfree/ring.hh"
 
 #define PUN(target, elem)                                                      \
@@ -52,7 +52,6 @@ public:
   kvstore(std::size_t size) : hmap(size) {}
   kv_completion serve_request(kv_request request) {
     kv_completion response;
-    response.id = request.id;
     switch (request.op) {
     case request_t::GET:
       handle_get(request, response);
@@ -67,16 +66,13 @@ public:
   }
 
 private:
-  tbb::concurrent_hash_map<int64_t, int64_t> hmap;
-  using const_accessor = decltype(hmap)::const_accessor;
-  using accessor = decltype(hmap)::accessor;
+  std::unordered_map<int64_t, int64_t> hmap;
   kvstore_config config;
 
   void handle_get(kv_request request, kv_completion &response) {
-    const_accessor lookup;
-    if (hmap.find(lookup, request.key)) {
-      response.val = lookup->second;
-      lookup.release();
+      auto it = hmap.find(request.key);
+    if (hmap.find(request.key) != hmap.end()) {
+      response.val = it->second;
       response.reponse = response_t::SUCCESS;
     } else {
       response.reponse = response_t::FAILURE;
@@ -85,9 +81,7 @@ private:
 
   void handle_put(kv_request request, kv_completion &response) {
     {
-      accessor inserter;
-      hmap.insert(inserter, request.key);
-      inserter->second = request.val;
+      hmap[request.key] = request.val;  
     }
 
     response.reponse = response_t::SUCCESS;
@@ -145,39 +139,12 @@ int main() {
       std::make_shared<message_allocator>("pool", 8095);
   server_iface server(ifc->eth_dev, 1, 1, con_config{sip, 1000}, allocator);
 
-  worker_interface kv_if(store, allocator.get());
-  auto network_thread = [&allocator](server_iface &server,
-                                     worker_interface &worker) {
-    poll_state<32> ps;
-    uint16_t del_cnt = 0;
-    while (true) {
-      auto events = server.poll(ps);
-      for (uint16_t i = 0; i < events; ++i) {
-        message *msg;
-        auto *con = ps.events[i];
-        if (con->receive_message(&msg, 1)) {
-          con->acknowledge_all();
-          worker.rx_ring.push(
-              {*static_cast<kv_packet<kv_request> *>(msg->data()), con});
-          rte_pktmbuf_free(msg);
-        }
-      }
-      while (!worker.tx_ring.empty() && del_cnt < 32) {
-        auto resp = worker.tx_ring.front();
-        auto *msg = allocator->alloc_message(sizeof(kv_packet<kv_completion>));
-        memcpy(msg->data(), &resp, sizeof(resp));
-        resp.second->send_message(msg, msg->len());
-        ++del_cnt;
-      }
-      server.accept();
-      server.flush();
-    }
-  };
-  auto worker = std::thread([&]() {
-    while (true)
-      kv_if.process_packets();
+  server.poll([&](transaction_slot &slot) {
+    auto *resp = allocator->alloc_message(sizeof(kv_packet<kv_completion>));
+    auto *req = slot.rx_if.read();
+    process_request(*store, rte_pktmbuf_mtod(req, kv_packet<kv_request> *),
+                    rte_pktmbuf_mtod(resp, kv_packet<kv_completion> *));
+    slot.tx_if.send(resp, true);
   });
-  network_thread(server, kv_if);
-  worker.join();
   return 0;
 }

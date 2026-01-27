@@ -1,8 +1,22 @@
 #include <bypass/fastt/connection.hh>
-#include <bypass/fastt/log.hh>
+#include <bypass/fastt/debug.hh>
 #include <bypass/fastt/message.hh>
 
 #include <cstdint>
+
+connection::connection(message_allocator *allocator, packet_if *pkt_if,
+             const con_config &target, uint16_t sport,
+             connection_manager *manager, bool is_client)
+      : allocator(allocator), transport_impl(new transport(
+                                  allocator, pkt_if, sport, target)),
+        manager(manager) {
+    slots.reserve(kMaxTransactionPerConnection);
+    for (uint16_t i = 0; i < kMaxTransactionPerConnection; ++i){
+      slots.emplace_back(i, transport_impl.get(), is_client, manager->con_timer_manager);
+      if(is_client)
+          free_slots.push_back(i);
+    }
+  }
 
 void connection::process_pkt(rte_mbuf *pkt) {
   auto *msg = static_cast<message*>(pkt);  
@@ -10,26 +24,14 @@ void connection::process_pkt(rte_mbuf *pkt) {
     return;
 } 
 
-uint16_t connection::receive_message(message** msgs, uint16_t cnt){
-    return transport_impl->receive_messages(msgs, cnt);
+void connection::acknowledge_all(){
+    transport_impl->acknowledge();
 }
 
 void connection::accept(){
     transport_impl->accept_connection();
 }
 
-bool connection::send_message(message *pkt, uint16_t len) {
-  pkt->set_size(len);
-  FASTT_LOG_DEBUG("Sent pkt of len %u\n", len);
-  return transport_impl->send_pkt(pkt);
-}
-
-void connection::acknowledge_all() { transport_impl->send_acks(); }
-
 void connection::open_connection(){
     transport_impl->open_connection();
-}
-
-bool connection::has_ready_message() const {
-  return transport_impl->poll();
 }

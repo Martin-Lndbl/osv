@@ -4,6 +4,8 @@
  * All rights reserved.
  */
 
+#include <cstdint>
+#include <dev/enav2/ena_if.h>
 #include <sys/cdefs.h>
 #include <sys/libkern.h>
 #include <api/bypass/dev.hh>
@@ -591,4 +593,8 @@ int ena_rss_hash_conf_get(struct rte_eth_dev *dev,
 
 	rss_conf->rss_hf = rss_hf;
 	return 0;
+}
+
+int ena_eth_dev::rss_reta_update(rte_eth_rss_reta_entry64* reta, uint16_t reta_size){
+    return ena_rss_reta_update(this, reta, reta_size);
 }

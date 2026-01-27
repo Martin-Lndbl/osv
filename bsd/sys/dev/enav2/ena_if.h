@@ -3,6 +3,7 @@
 
 #include <bypass/dev.hh>
 #include <bypass/mem.hh>
+#include <bypass/rss.hh>
 #include <cstdint>
 
 class ena_eth_dev : public rte_eth_dev{
@@ -24,5 +25,6 @@ public:
     void get_stats(rte_eth_stats *stats) override;
     int drv_configure() override;
     int get_dev_info(rte_eth_dev_info *info) override; 
+    int rss_reta_update(rte_eth_rss_reta_entry64* reta, uint16_t reta_size) override;
 };
 #endif // !ENA_IF_H_

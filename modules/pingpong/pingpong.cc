@@ -170,7 +170,7 @@ static int receive_packets_pong(port_config& pconf, rte_mbuf *pkt) {
 }
 
 static void do_ping(port_config &pconf) {
-  uint16_t nb_rx = 0, burst_size = 1, total = 0;
+  uint16_t nb_rx = 0, burst_size = pconf.burst_size, total = 0;
   uint16_t nb_tx = burst_size;
 
   std::vector<rte_mbuf *> pkts(burst_size, nullptr);
@@ -251,7 +251,11 @@ int main(int argc, char *argv[]) {
       {"rt", required_argument, 0, 0},
       {"mtu", required_argument, 0, 0},
       {"mode", required_argument, 0, 0},
+      {"bs", required_argument, 0, 0},
       {0, 0, 0, 0}};
+
+  pconf.burst_size = 1;
+  pconf.rt = rte_get_timer_hz();
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
     switch (option_index) {
@@ -266,15 +270,18 @@ int main(int argc, char *argv[]) {
       break;
     case 3:
       pconf.rt = atoi(optarg);
+      break;
     case 4:
       conf.mtu = atoi(optarg);
       break;
     case 5:
       opmode = std::string(optarg) == "PONG" ? PONG : PING; 
       break;
+    case 6:
+      pconf.burst_size = atoi(optarg);
+      break;
     }
   }
-  pconf.burst_size = 4;
   sched::update_disable_reschedule(true);
   if (configure_port(pconf))
     return -1;

@@ -6,7 +6,6 @@
 #include <bypass/util.hh>
 #include <cassert>
 #include <cerrno>
-#include <cstdint>
 
 #include <algorithm>
 #include <api/bypass/dev.hh>
@@ -28,7 +27,6 @@
 #include "net.hh"
 #include <osv/sched.hh>
 
-static constexpr uint32_t pbuf_sz = 1400;
 
 #define SWAP(val1, val2)                                                       \
   do {                                                                         \
@@ -37,10 +35,6 @@ static constexpr uint32_t pbuf_sz = 1400;
     val2 = temp;                                                               \
   } while (0);
 
-using pool_ptr =
-    std::unique_ptr<rte_pktmbuf_pool,
-                    decltype(std::addressof(
-                        rte_pktmbuf_pool::rte_pktmbuf_pool_delete))>;
 
 struct payload {
   uint64_t ticks;
@@ -70,19 +64,17 @@ template<typename T> static __inline void prefetch(rte_mbuf *pbuf, T& data){
     rte_prefetch0_write(rte_pktmbuf_mtod(pbuf, char*) + sizeof(rte_ipv4_hdr) + sizeof(rte_udp_hdr) + sizeof(rte_ether_hdr));
 }
 
+using pool_ptr = std::unique_ptr<rte_pktmbuf_pool, decltype(&rte_mempool_free)>;
+
 struct port_config {
   pool_ptr pool;
-  pool_ptr send_pool;
   app_config app;
   rte_eth_dev *dev;
   uint64_t rt;
   uint16_t burst_size;
   uint64_t ticks = 0, pkts = 0, faulty = 0;
   port_config()
-      : pool(rte_pktmbuf_pool::rte_pktmbuf_pool_create("pool", pbuf_sz, 4095, 0),
-             &rte_pktmbuf_pool::rte_pktmbuf_pool_delete),
-        send_pool(rte_pktmbuf_pool::rte_pktmbuf_pool_create("spool", pbuf_sz, 2047, 0),
-                  &rte_pktmbuf_pool::rte_pktmbuf_pool_delete),
+      : pool(rte_pktmbuf_pool_create("pool", 0, 0, 0, 0, 0), &rte_mempool_free),
         rt(300), burst_size(1) {}
 };
 
@@ -152,7 +144,7 @@ static uint16_t receive_packets_ping(port_config &pconf,
     ++pconf.pkts;
     ++total;
   }
-  pconf.pool->free_bulk(pkts.data(), nb_rx);
+  rte_pktmbuf_free_bulk(pkts.data(), nb_rx);
   return total;
 }
 
@@ -186,12 +178,13 @@ static void do_ping(port_config &pconf) {
   // const auto max_cycles_per_it = rte_get_timer_hz();
   auto cycles = rte_get_timer_cycles();
   auto end = cycles + pconf.rt * rte_get_timer_hz();
-  pconf.send_pool->init([&](rte_mbuf *pkt) { create_packet(pconf.app, pkt); });
   for (; cycles < end; cycles = rte_get_timer_cycles()) {
-      if (pconf.send_pool->alloc_bulk(pkts.data(), nb_tx)){
-          std::cerr << "not enough buffers" << std::endl;  
+      if (rte_pktmbuf_alloc_bulk(pconf.pool.get(), pkts.data(), nb_tx)){
+          std::cerr << "not enough buffers" << std::endl;
           continue;
     }
+    for (auto *pkt : pkts)
+      create_packet(pconf.app, pkt);
     init_packets(pkts);
     nb_tx = pconf.dev->tx_burst(0, pkts.data(), burst_size);
     // auto deadline = cycles + max_cycles_per_it;
@@ -277,6 +270,6 @@ int main(int argc, char *argv[]) {
   }
   sched::update_disable_reschedule(false);
 
-  std::cerr << pconf.pool->get_stat() << std::endl;
+  std::cerr << "done" << std::endl;
   close_port(pconf);
 }

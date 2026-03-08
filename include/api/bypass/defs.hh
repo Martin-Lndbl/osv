@@ -4,10 +4,6 @@
  */
 #ifndef BYPASS_DEFS_H
 #define BYPASS_DEFS_H
-
- 
-#include <cstddef>
-#include <cstdint>
  
 #define RTE_PTYPE_UNKNOWN                   0x00000000
 #define RTE_PTYPE_L2_ETHER                  0x00000001

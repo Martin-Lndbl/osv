@@ -53,7 +53,7 @@ static void create_packet(const app_config& config, rte_mbuf *pkt){
 
 }
 
-static bool verify_packet(const rte_mbuf* pkt){
+static bool verify_packet(rte_mbuf* pkt){
     auto *eth = rte_pktmbuf_mtod(pkt, rte_ether_hdr*);
     if(eth->ether_type != htobe16(RTE_ETHER_TYPE_IPV4))
         return false;

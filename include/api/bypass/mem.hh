@@ -1,14 +1,11 @@
 #ifndef BYPASS_MEM_H
 #define BYPASS_MEM_H
 
-#include "osv/mmu-defs.hh"
-#include "osv/pagealloc.hh"
-#include "osv/virt_to_phys.hh"
-#include <atomic>
+#include "bypass/slab.hh"
+#include <bypass/time.hh>
 #include <bypass/util.hh>
 #include <cassert>
 #include <cstdint>
-#include <iostream>
 #include <osv/types.h>
 
 #define RTE_MBUF_F_RX_VLAN (1ULL << 0)
@@ -147,8 +144,7 @@
 #define RTE_MBUF_DEFAULT_DATAROOM 2048
 #define RTE_MBUF_DEFAULT_BUF_SIZE (RTE_MBUF_DEFAULT_DATAROOM)
 
-class rte_pktmbuf_pool;
-struct rte_mbuf;
+#define SOCKET_ID_ANY (-1)
 
 template <typename T, T alignment> static constexpr T align(T val) {
   return (val + alignment - 1) & ~(alignment - 1);
@@ -156,197 +152,21 @@ template <typename T, T alignment> static constexpr T align(T val) {
 
 #define rte_free free
 
+using rte_mbuf = sant::mbuf;
+using rte_pktmbuf_pool = sant::slab_allocator;
+using rte_mempool = rte_pktmbuf_pool;
+
 void rte_pktmbuf_free(rte_mbuf *mbuf);
 void rte_mbuf_raw_free(rte_mbuf *mbuf);
+int rte_pktmbuf_alloc_bulk(rte_mempool* pool, rte_mbuf **pkts, uint16_t size);
 void rte_pktmbuf_free_bulk(rte_mbuf **pkts, uint16_t size);
-void rte_pktmbuf_read(rte_mbuf *, uint32_t, uint32_t, uint8_t *);
+const void *rte_pktmbuf_read(rte_mbuf *, uint32_t, uint32_t, uint8_t *);
+rte_mempool *rte_pktmbuf_pool_create(const char *name, unsigned n,
+                                     unsigned cache_size, uint16_t priv_size,
+                                     uint16_t data_room_size, int socket_id);
+void rte_mempool_free(rte_mempool *pool);
 
-struct rte_mbuf {
-  // next in chain
-  rte_mbuf *next;
-
-  // address of the mbuf structure
-  char *buf_addr;
-
-  // timestamp
-  uint64_t ts;
-
-  // application private data
-  void *priv;
-
-  // memory pool allocated from
-  rte_pktmbuf_pool *pool;
-
-  // NIC offload flags
-  uint64_t ol_flags;
-
-  // IO Virtual Address
-  uintptr_t iova;
-
-  // rss hash
-  struct {
-    uint64_t rss;
-  } hash;
-
-  // offset of the dataroom
-  uint16_t data_offset;
-
-  // size of the packet(chained)
-  // size of the used fraction of the dataroom
-  // total length of the buffer
-  uint16_t pkt_len, data_len, buf_len;
-
-  // reference count
-  std::atomic<uint16_t> refcnt;
-
-  // length of the l2 header
-  // length of the l3 header
-  // length of the l4 header
-  // number of segments in the chain
-  uint16_t l2_len, l3_len, l4_len, nb_segs;
-
-  // type of the packet
-  uint32_t packet_type;
-
-  void headroom_adj(uint32_t size) {
-    assert(data_offset + size < buf_len);
-    data_offset += size;
-    pkt_len -= size;
-    data_len -= size;
-  }
-
-  template <typename T> T *prepend() {
-    data_offset -= sizeof(T);
-    pkt_len += sizeof(T);
-    data_len += sizeof(T);
-    return reinterpret_cast<T *>(buf_addr + data_offset);
-  }
-};
-
-#define rte_pktmbuf_mtod(m, t) reinterpret_cast<t>(m->buf_addr + m->data_offset)
-#define rte_pktmbuf_mtod_offset(m, t, o) reinterpret_cast<t>(m->buf_addr + m->data_offset + o)
-
-using rte_mempool = rte_pktmbuf_pool;
-struct pageheader {
-  pageheader *next;
-  uintptr_t phys;
-};
-
-template <typename T> struct objheader {
-  objheader *next;
-  T obj;
-};
-template <typename Obj> struct Pool {
-  static constexpr uint16_t kMaxHeadRoomSize = 128;
-  static constexpr uint16_t kOffsetInHugePage = sizeof(pageheader);
-  using element_type = Obj;
-
-  pageheader *memory;
-  objheader<element_type> *objs;
-  uint64_t elems, inuse, alloc_size;
-
-  Pool(uint32_t size, uint32_t elems)
-      : memory(nullptr), objs(nullptr), elems(elems), inuse(0) {
-    alloc_size = align<uint64_t, RTE_CACHE_LINE_SIZE>(
-        size + kMaxHeadRoomSize + sizeof(objheader<element_type>));
-    uint32_t offset = mmu::huge_page_size;
-    for (uint32_t i = 0; i < elems; ++i) {
-      if (mmu::huge_page_size - offset < alloc_size) {
-        auto *page = static_cast<pageheader *>(
-            memory::alloc_huge_page(mmu::huge_page_size));
-        offset = kOffsetInHugePage;
-        page->next = memory;
-        memory = page;
-        page->phys = mmu::virt_to_phys(page);
-        assert((memory->phys & (mmu::huge_page_size - 1)) == 0);
-      }
-
-      auto *data = reinterpret_cast<char *>(memory) + offset;
-      auto *obj = reinterpret_cast<objheader<element_type> *>(data);
-      new (&obj->obj) element_type{};
-      obj->obj.buf_len = alloc_size;
-      obj->obj.buf_addr = reinterpret_cast<char *>(&obj->obj);
-      obj->obj.data_offset = sizeof(element_type) + kMaxHeadRoomSize;
-      obj->obj.iova = memory->phys + offset + sizeof(objheader<element_type>) +
-                      kMaxHeadRoomSize;
-      obj->next = objs;
-
-      objs = obj;
-      offset += alloc_size;
-    }
-  }
-
-  void put(element_type *obj) {
-    objheader<element_type> *header =
-        reinterpret_cast<objheader<element_type> *>(
-            reinterpret_cast<uint8_t *>(obj) -
-            offsetof(objheader<element_type>, obj));
-    header->next = objs;
-    objs = header;
-    ++elems;
-    --inuse;
-  }
-
-  uint32_t can_alloc(uint32_t n) { return n <= elems; }
-
-  int get(element_type **elems, uint32_t n) {
-    assert(can_alloc(n));
-    for (uint32_t i = 0; i < n; ++i) {
-      elems[i] = &objs->obj;
-      objs = objs->next;
-    }
-    elems -= n;
-    inuse += n;
-    return 0;
-  }
-
-  ~Pool() {
-    for (auto *it = memory; it;) {
-      auto *to_free = it;
-      it = it->next;
-      memory::free_huge_page(to_free, mmu::huge_page_size);
-    }
-  }
-};
-
-class rte_pktmbuf_pool {
-  static constexpr uint32_t cache_size = 256;
-
-public:
-  rte_pktmbuf_pool(const char *name, uint32_t size, uint32_t elems,
-                   uint32_t flags)
-      : pool_impl(size, elems), data_size(elems) {
-    (void)name;
-    (void)flags;
-  }
-
-  ~rte_pktmbuf_pool();
-
-  rte_pktmbuf_pool(const rte_pktmbuf_pool &) = delete;
-  rte_pktmbuf_pool(rte_pktmbuf_pool &&) noexcept = delete;
-
-  static rte_pktmbuf_pool *rte_pktmbuf_pool_create(const char *name,
-                                                   uint32_t size,
-                                                   uint32_t elems,
-                                                   uint32_t flags);
-  static void rte_pktmbuf_pool_delete(rte_pktmbuf_pool *pb_pool);
-
-  int alloc_bulk(rte_mbuf **pkts, uint16_t nb);
-  void free_bulk(rte_mbuf **pkts, uint16_t nb);
-
-  uint64_t get_stat() const { return malloc_stat; }
-  uint32_t get_data_size() const { return data_size; }
-
-  template <typename F> void init(F &&fun) {
-    auto *obj = pool_impl.objs;
-    for (; obj; obj = obj->next)
-      fun(&obj->obj);
-  }
-
-private:
-  Pool<rte_mbuf> pool_impl;
-  uint32_t data_size;
-  uint64_t malloc_stat = 0;
-};
-
+#define rte_pktmbuf_mtod(m, t) m->data<std::remove_pointer<t>::type>()
+#define rte_pktmbuf_mtod_offset(m, t, o)                                       \
+  m->data<std::remove_pointer<t>::type>(o)
 #endif // !BYPASS_MEM_H

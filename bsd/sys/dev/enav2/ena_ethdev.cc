@@ -12,6 +12,7 @@
 #include "osv/mmu-defs.hh"
 #include "osv/msi.hh"
 #include "osv/osv_c_wrappers.h"
+#include "osv/sched.hh"
 #include "osv/virt_to_phys.hh"
 
 #include <api/bypass/bit.hh>
@@ -22,13 +23,13 @@
 #include <api/bypass/rss.hh>
 #include <api/bypass/time.hh>
 #include <api/bypass/util.hh>
-#include <osv/trace.hh>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <dev/enav2/base/ena_plat.h>
 #include <drivers/pci-device.hh>
 #include <machine/param.h>
+#include <osv/trace.hh>
 
 #define DRV_MODULE_VER_MAJOR 2
 #define DRV_MODULE_VER_MINOR 11
@@ -216,24 +217,23 @@ static ena_vendor_info_t ena_vendor_info_array[] = {
     {0, 0, 0}};
 static ena_aenq_handlers aenq_handlers;
 
-static int ena_dev_configure(ena_eth_dev* dev);
+static int ena_dev_configure(ena_eth_dev *dev);
 static int ena_device_init(struct ena_adapter *adapter, pci::device *pdev,
                            struct ena_com_dev_get_features_ctx *get_feat_ctx);
 static void ena_tx_map_mbuf(struct ena_ring *tx_ring,
-                            struct ena_tx_buffer *tx_info,
-                            struct rte_mbuf *mbuf, void **push_header,
-                            uint16_t *header_len);
-static int ena_xmit_mbuf(struct ena_ring *tx_ring, struct rte_mbuf *mbuf);
+                            struct ena_tx_buffer *tx_info, rte_mbuf *mbuf,
+                            void **push_header, uint16_t *header_len);
+static int ena_xmit_mbuf(struct ena_ring *tx_ring, rte_mbuf *mbuf);
 static int ena_tx_cleanup(void *txp, uint32_t free_pkt_cnt);
 
-static inline void ena_init_rx_mbuf(struct rte_mbuf *mbuf, uint16_t len);
-static struct rte_mbuf *ena_rx_mbuf(struct ena_ring *rx_ring,
-                                    struct ena_com_rx_buf_info *ena_bufs,
-                                    uint32_t descs, uint16_t *next_to_clean,
-                                    uint8_t offset);
+static inline void ena_init_rx_mbuf(rte_mbuf *mbuf, uint16_t len);
+static rte_mbuf *ena_rx_mbuf(struct ena_ring *rx_ring,
+                             struct ena_com_rx_buf_info *ena_bufs,
+                             uint32_t descs, uint16_t *next_to_clean,
+                             uint8_t offset);
 
-static int ena_add_single_rx_desc(struct ena_com_io_sq *io_sq,
-                                  struct rte_mbuf *mbuf, uint16_t id);
+static int ena_add_single_rx_desc(struct ena_com_io_sq *io_sq, rte_mbuf *mbuf,
+                                  uint16_t id);
 static int ena_populate_rx_queue(struct ena_ring *rxq, unsigned int count);
 static void ena_init_rings(struct ena_adapter *adapter,
                            bool disable_meta_caching);
@@ -373,8 +373,7 @@ static inline void ena_trigger_reset(struct ena_adapter *adapter,
   }
 }
 
-static inline void ena_rx_mbuf_prepare(struct ena_ring *rx_ring,
-                                       struct rte_mbuf *mbuf,
+static inline void ena_rx_mbuf_prepare(struct ena_ring *rx_ring, rte_mbuf *mbuf,
                                        struct ena_com_rx_ctx *ena_rx_ctx) {
   struct ena_stats_rx *rx_stats = &rx_ring->rx_stats;
   uint64_t ol_flags = 0;
@@ -434,7 +433,7 @@ static inline void ena_rx_mbuf_prepare(struct ena_ring *rx_ring,
   mbuf->packet_type = packet_type;
 }
 
-static inline void ena_tx_mbuf_prepare(struct rte_mbuf *mbuf,
+static inline void ena_tx_mbuf_prepare(rte_mbuf *mbuf,
                                        struct ena_com_tx_ctx *ena_tx_ctx,
                                        uint64_t queue_offloads,
                                        bool disable_meta_caching) {
@@ -793,66 +792,60 @@ static void ena_stats_restart(rte_eth_dev *dev) {
   adapter->drv_stats->rx_drops = 0;
 }
 
+static int ena_stats_get(rte_eth_dev *dev, rte_eth_stats *stats) {
+  ena_admin_basic_stats ena_stats;
+  struct ena_adapter *adapter = dev->get<ena_adapter>();
+  struct ena_com_dev *ena_dev = &adapter->ena_dev;
+  int rc;
+  int i;
+  int max_rings_stats;
 
-static int ena_stats_get( rte_eth_dev *dev,
-                          rte_eth_stats *stats)
-{
-        ena_admin_basic_stats ena_stats;
-        struct ena_adapter *adapter = dev->get<ena_adapter>();
-        struct ena_com_dev *ena_dev = &adapter->ena_dev;
-        int rc;
-        int i;
-        int max_rings_stats;
+  memset(&ena_stats, 0, sizeof(ena_stats));
 
-        memset(&ena_stats, 0, sizeof(ena_stats));
+  rte_spinlock_lock(&adapter->admin_lock);
+  rc = ena_com_get_dev_basic_stats(ena_dev, &ena_stats);
+  rte_spinlock_unlock(&adapter->admin_lock);
+  if (unlikely(rc)) {
+    ena_log_raw(ERR, "Could not retrieve statistics from ENA");
+    return rc;
+  }
 
-        rte_spinlock_lock(&adapter->admin_lock);
-        rc = ena_com_get_dev_basic_stats(ena_dev, &ena_stats);
-        rte_spinlock_unlock(&adapter->admin_lock);
-        if (unlikely(rc)) {
-                ena_log_raw(ERR, "Could not retrieve statistics from ENA");
-                return rc;
-        }
+  stats->ipackets =
+      __MERGE_64B_H_L(ena_stats.rx_pkts_high, ena_stats.rx_pkts_low);
+  stats->opackets =
+      __MERGE_64B_H_L(ena_stats.tx_pkts_high, ena_stats.tx_pkts_low);
+  stats->ibytes =
+      __MERGE_64B_H_L(ena_stats.rx_bytes_high, ena_stats.rx_bytes_low);
+  stats->obytes =
+      __MERGE_64B_H_L(ena_stats.tx_bytes_high, ena_stats.tx_bytes_low);
 
-        stats->ipackets = __MERGE_64B_H_L(ena_stats.rx_pkts_high,
-                                          ena_stats.rx_pkts_low);
-        stats->opackets = __MERGE_64B_H_L(ena_stats.tx_pkts_high,
-                                          ena_stats.tx_pkts_low);
-        stats->ibytes = __MERGE_64B_H_L(ena_stats.rx_bytes_high,
-                                        ena_stats.rx_bytes_low);
-        stats->obytes = __MERGE_64B_H_L(ena_stats.tx_bytes_high,
-                                        ena_stats.tx_bytes_low);
+  stats->imissed = adapter->drv_stats->rx_drops;
+  stats->ierrors = rte_atomic64_read(&adapter->drv_stats->ierrors);
+  stats->oerrors = rte_atomic64_read(&adapter->drv_stats->oerrors);
+  stats->rx_nombuf = rte_atomic64_read(&adapter->drv_stats->rx_nombuf);
 
-        stats->imissed = adapter->drv_stats->rx_drops;
-        stats->ierrors = rte_atomic64_read(&adapter->drv_stats->ierrors);
-        stats->oerrors = rte_atomic64_read(&adapter->drv_stats->oerrors);
-        stats->rx_nombuf = rte_atomic64_read(&adapter->drv_stats->rx_nombuf);
+  max_rings_stats =
+      RTE_MIN(dev->data.nb_rx_queues, RTE_ETHDEV_QUEUE_STAT_CNTRS);
+  for (i = 0; i < max_rings_stats; ++i) {
+    struct ena_stats_rx *rx_stats = &adapter->rx_ring[i].rx_stats;
 
-        max_rings_stats = RTE_MIN(dev->data.nb_rx_queues,
-                RTE_ETHDEV_QUEUE_STAT_CNTRS);
-        for (i = 0; i < max_rings_stats; ++i) {
-                struct ena_stats_rx *rx_stats = &adapter->rx_ring[i].rx_stats;
+    stats->q_ibytes[i] = rx_stats->bytes;
+    stats->q_ipackets[i] = rx_stats->cnt;
+    stats->q_errors[i] = rx_stats->bad_desc_num + rx_stats->bad_req_id +
+                         rx_stats->bad_desc + rx_stats->unknown_error;
+  }
 
-                stats->q_ibytes[i] = rx_stats->bytes;
-                stats->q_ipackets[i] = rx_stats->cnt;
-                stats->q_errors[i] = rx_stats->bad_desc_num +
-                        rx_stats->bad_req_id +
-                        rx_stats->bad_desc +
-                        rx_stats->unknown_error;
-        }
+  max_rings_stats =
+      RTE_MIN(dev->data.nb_tx_queues, RTE_ETHDEV_QUEUE_STAT_CNTRS);
+  for (i = 0; i < max_rings_stats; ++i) {
+    struct ena_stats_tx *tx_stats = &adapter->tx_ring[i].tx_stats;
 
-        max_rings_stats = RTE_MIN(dev->data.nb_tx_queues,
-                RTE_ETHDEV_QUEUE_STAT_CNTRS);
-        for (i = 0; i < max_rings_stats; ++i) {
-                struct ena_stats_tx *tx_stats = &adapter->tx_ring[i].tx_stats;
+    stats->q_obytes[i] = tx_stats->bytes;
+    stats->q_opackets[i] = tx_stats->cnt;
+  }
 
-                stats->q_obytes[i] = tx_stats->bytes;
-                stats->q_opackets[i] = tx_stats->cnt;
-        }
-
-        return 0;
+  return 0;
 }
-
 
 static int ena_create_io_queue(rte_eth_dev *dev, ena_ring *ring) {
   ena_adapter *adapter = ring->adapter;
@@ -970,8 +963,8 @@ static int ena_queue_start(struct rte_eth_dev *dev, ena_ring *ring) {
   return 0;
 }
 
-static int ena_add_single_rx_desc(struct ena_com_io_sq *io_sq,
-                                  struct rte_mbuf *mbuf, uint16_t id) {
+static int ena_add_single_rx_desc(struct ena_com_io_sq *io_sq, rte_mbuf *mbuf,
+                                  uint16_t id) {
   struct ena_com_buf ebuf;
   int rc;
 
@@ -1007,7 +1000,7 @@ static int ena_populate_rx_queue(ena_ring *rxq, unsigned int count) {
 #endif
 
   /* get resources for incoming packets */
-  rc = rxq->mb_pool->alloc_bulk(mbufs, count);
+  rc = rte_pktmbuf_alloc_bulk(rxq->mb_pool, mbufs, count);
   if (unlikely(rc < 0)) {
     rte_atomic64_inc(&rxq->adapter->drv_stats->rx_nombuf);
     ++rxq->rx_stats.mbuf_alloc_fail;
@@ -1016,7 +1009,7 @@ static int ena_populate_rx_queue(ena_ring *rxq, unsigned int count) {
   }
 
   for (i = 0; i < count; i++) {
-    struct rte_mbuf *mbuf = mbufs[i];
+    rte_mbuf *mbuf = mbufs[i];
     struct ena_rx_buffer *rx_info;
 
     if (likely((i + 4) < count))
@@ -1036,7 +1029,7 @@ static int ena_populate_rx_queue(ena_ring *rxq, unsigned int count) {
   if (unlikely(i < count)) {
     ena_log_raw(WARN, "Refilled Rx queue[%d] with only %d/%d buffers", rxq->id,
                 i, count);
-    rxq->mb_pool->free_bulk(&mbufs[i], count - i);
+    rte_pktmbuf_free_bulk(&mbufs[i], count - i);
     ++rxq->rx_stats.refill_partial;
   }
 
@@ -1248,7 +1241,7 @@ static void check_for_tx_completions(ena_adapter *adapter) {
   adapter->last_tx_comp_qid = qid;
 }
 
-static void ena_timer_wd_callback(void *arg) {
+[[maybe_unused]] static void ena_timer_wd_callback(void *arg) {
   rte_eth_dev *dev = static_cast<rte_eth_dev *>(arg);
   ena_adapter *adapter = dev->get<ena_adapter>();
 
@@ -1327,7 +1320,7 @@ static int ena_set_queues_placement_policy(
     return 0;
 
   adapter->dev_mem->map();
-  ena_dev->mem_bar = const_cast<void*>(adapter->dev_mem->get_mmio());
+  ena_dev->mem_bar = const_cast<void *>(adapter->dev_mem->get_mmio());
 
   return 0;
 }
@@ -1540,17 +1533,17 @@ static int ena_infos_get(rte_eth_dev *dev, rte_eth_dev_info *dev_info) {
  * datapath
  * ********************************************************************/
 
-static inline void ena_init_rx_mbuf(struct rte_mbuf *mbuf, uint16_t len) {
+static inline void ena_init_rx_mbuf(rte_mbuf *mbuf, uint16_t len) {
   mbuf->data_len = len;
   mbuf->next = NULL;
 }
 
-static struct rte_mbuf *ena_rx_mbuf(struct ena_ring *rx_ring,
-                                    struct ena_com_rx_buf_info *ena_bufs,
-                                    uint32_t descs, uint16_t *next_to_clean,
-                                    uint8_t offset) {
-  struct rte_mbuf *mbuf;
-  struct rte_mbuf *mbuf_head;
+static rte_mbuf *ena_rx_mbuf(struct ena_ring *rx_ring,
+                             struct ena_com_rx_buf_info *ena_bufs,
+                             uint32_t descs, uint16_t *next_to_clean,
+                             uint8_t offset) {
+  rte_mbuf *mbuf;
+  rte_mbuf *mbuf_head;
   struct ena_rx_buffer *rx_info;
   int rc;
   uint16_t ntc, len, req_id, buf = 0;
@@ -1787,7 +1780,7 @@ static int ena_xmit_mbuf(ena_ring *tx_ring, rte_mbuf *mbuf) {
 }
 
 static int ena_tx_cleanup(void *txp, uint32_t free_pkt_cnt) {
-  struct rte_mbuf *pkts_to_clean[ENA_CLEANUP_BUF_THRESH];
+  rte_mbuf *pkts_to_clean[ENA_CLEANUP_BUF_THRESH];
   struct ena_ring *tx_ring = (struct ena_ring *)txp;
   size_t mbuf_cnt = 0;
   size_t pkt_cnt = 0;
@@ -1805,7 +1798,7 @@ static int ena_tx_cleanup(void *txp, uint32_t free_pkt_cnt) {
   cleanup_budget = (free_pkt_cnt == 0) ? tx_ring->size_mask : free_pkt_cnt;
 
   while (likely(total_tx_pkts < cleanup_budget)) {
-    struct rte_mbuf *mbuf;
+    rte_mbuf *mbuf;
     struct ena_tx_buffer *tx_info;
     uint16_t req_id;
 
@@ -1904,7 +1897,9 @@ int ena_eth_dev::start() {
   adapter->keep_alive_timeout = ENA_DEVICE_KALIVE_TIMEOUT;
 
   ticks = rte_get_timer_hz();
-  rte_timer_reset(&adapter->timer_wd, ticks, ena_timer_wd_callback, this);
+
+  // disable for now
+  // rte_timer_reset(&adapter->timer_wd, ticks, ena_timer_wd_callback, this);
 
   ++adapter->dev_stats.dev_start;
   adapter->state = ENA_ADAPTER_STATE_RUNNING;
@@ -1928,7 +1923,7 @@ int ena_eth_dev::stop() {
   ena_com_dev *ena_dev = &adapter->ena_dev;
   uint16_t i;
   int rc;
-  rte_timer_stop_sync(&adapter->timer_wd);
+  // rte_timer_stop_sync(&adapter->timer_wd);
   ena_log_raw(INFO, "irqs: %lu\n", adapter->irqs.load());
   ena_queue_stop_all(this, ENA_RING_TYPE_TX);
   ena_queue_stop_all(this, ENA_RING_TYPE_RX);
@@ -2093,7 +2088,7 @@ int ena_eth_dev::rx_queue_setup(uint16_t qid, uint16_t nb_desc,
   }
   bzero(rxq->rx_buffer_info, sizeof(ena_rx_buffer) * nb_desc);
   rxq->rx_refill_buffer = static_cast<rte_mbuf **>(
-      aligned_alloc(RTE_CACHE_LINE_SIZE, sizeof(struct rte_mbuf *) * nb_desc));
+      aligned_alloc(RTE_CACHE_LINE_SIZE, sizeof(rte_mbuf *) * nb_desc));
   if (!rxq->rx_refill_buffer) {
     ena_log_raw(ERR, "Failed to allocate memory for Rx refill buffer");
     rte_free(rxq->rx_buffer_info);
@@ -2132,11 +2127,12 @@ int ena_eth_dev::rx_queue_setup(uint16_t qid, uint16_t nb_desc,
   return 0;
 }
 
-TRACEPOINT(trace_ena_eth_dev_tx_burst, "qid=%x, tx_pkts=%y, nb_pkts=%z", uint16_t, rte_mbuf**, uint16_t);
+TRACEPOINT(trace_ena_eth_dev_tx_burst, "qid=%x, tx_pkts=%y, nb_pkts=%z",
+           uint16_t, rte_mbuf **, uint16_t);
 TRACEPOINT(trace_ena_eth_dev_tx_burst_ret, "");
 uint16_t ena_eth_dev::tx_burst(uint16_t qid, rte_mbuf **tx_pkts,
                                uint16_t nb_pkts) {
-  trace_ena_eth_dev_tx_burst(qid, tx_pkts, nb_pkts);  
+  trace_ena_eth_dev_tx_burst(qid, tx_pkts, nb_pkts);
   if (qid >= data.nb_tx_queues)
     return 0;
   ena_ring *tx_ring = static_cast<ena_ring *>(data.tx_queues[qid]);
@@ -2177,11 +2173,12 @@ uint16_t ena_eth_dev::tx_burst(uint16_t qid, rte_mbuf **tx_pkts,
   return sent_idx;
 }
 
-TRACEPOINT(trace_ena_eth_dev_rx_burst, "qid=%x, rx_pkts=%y, nb_pkts=%z", uint16_t, rte_mbuf**, uint16_t);
+TRACEPOINT(trace_ena_eth_dev_rx_burst, "qid=%x, rx_pkts=%y, nb_pkts=%z",
+           uint16_t, rte_mbuf **, uint16_t);
 TRACEPOINT(trace_ena_eth_dev_rx_burst_ret, "");
 uint16_t ena_eth_dev::rx_burst(uint16_t qid, rte_mbuf **rx_pkts,
                                uint16_t nb_pkts) {
-  trace_ena_eth_dev_rx_burst(qid, rx_pkts, nb_pkts);  
+  trace_ena_eth_dev_rx_burst(qid, rx_pkts, nb_pkts);
   if (qid >= data.nb_rx_queues)
     return 0;
   ena_ring *rx_ring = static_cast<ena_ring *>(data.rx_queues[qid]);
@@ -2189,7 +2186,7 @@ uint16_t ena_eth_dev::rx_burst(uint16_t qid, rte_mbuf **rx_pkts,
   uint16_t next_to_clean = rx_ring->next_to_clean;
   enum ena_regs_reset_reason_types reset_reason;
   uint16_t descs_in_use;
-  struct rte_mbuf *mbuf;
+  rte_mbuf *mbuf;
   uint16_t completed;
   struct ena_com_rx_ctx ena_rx_ctx;
   int i, rc = 0;
@@ -2351,7 +2348,8 @@ bool ena_probe(pci::device *pdev) {
   ena_vendor_info_t *ent = ena_vendor_info_array;
   while (ent->vendor_id != 0) {
     if (pdev->get_id() == hw_device_id(ent->vendor_id, ent->device_id)) {
-      ena_log_raw(INFO, "vendor=%x device=%x\n", ent->vendor_id, ent->device_id);
+      ena_log_raw(INFO, "vendor=%x device=%x\n", ent->vendor_id,
+                  ent->device_id);
 
       return true;
     }
@@ -2380,7 +2378,7 @@ int ena_attach(pci::device *dev, ena_adapter **_adapter) {
       malloc(sizeof(ena_eth_dev), M_DEVBUF, M_WAITOK | M_ZERO));
   adapter->edev = edev;
   new (adapter->edev) ena_eth_dev(adapter);
-  rte_timer_init(&adapter->timer_wd);
+  // rte_timer_init(&adapter->timer_wd);
 
   eth_os::register_port(adapter->edev);
   const char *queue_type_str;
@@ -2395,7 +2393,8 @@ int ena_attach(pci::device *dev, ena_adapter **_adapter) {
     return -ENXIO;
   }
   adapter->regs->map();
-  ena_dev->reg_bar = static_cast<u8*>(const_cast<void*>(adapter->regs->get_mmio()));
+  ena_dev->reg_bar =
+      static_cast<u8 *>(const_cast<void *>(adapter->regs->get_mmio()));
   /* Pass device data as a pointer which can be passed to the IO functions
    * by the ena_com (for example - the memory allocation).
    */
@@ -2540,7 +2539,7 @@ int ena_detach(ena_adapter *adapter) {
     ret = adapter->edev->stop();
   adapter->state = ENA_ADAPTER_STATE_CLOSED;
   /* Stop timer service */
-  rte_timer_stop_sync(&adapter->timer_wd);
+  // rte_timer_stop_sync(&adapter->timer_wd);
 
   ena_rx_queue_release_all(adapter->edev);
   ena_tx_queue_release_all(adapter->edev);
@@ -2631,6 +2630,8 @@ static int ena_request_mgmnt_irq(ena_adapter *adapter) {
   }
 
   auto vec = assigned[0];
+  // should be pinned
+  vec->set_affinity(sched::current_cpu);
   if (!_msi.assign_isr(vec, [adapter]() { ena_intr_msix_mgmnt(adapter); })) {
     _msi.free_vectors(assigned);
     ena_log(pdev, ERR, "could not assign MGMNT irq vector isr: %d",
@@ -2715,10 +2716,8 @@ int ena_eth_dev::get_dev_info(rte_eth_dev_info *info) {
   return ena_infos_get(this, info);
 }
 
-int ena_eth_dev::drv_configure(){
-    return ena_dev_configure(this);
-}
+int ena_eth_dev::drv_configure() { return ena_dev_configure(this); }
 
-void ena_eth_dev::get_stats(rte_eth_stats *stats){
-    ena_stats_get(this, stats);
+void ena_eth_dev::get_stats(rte_eth_stats *stats) {
+  ena_stats_get(this, stats);
 }

@@ -2,7 +2,6 @@
 #define BYPASS_UTIL_H
 
 #include "osv/mmio.hh"
-#include "osv/types.h"
 #include <atomic>
 #include <cstdint>
 #include <features.h>

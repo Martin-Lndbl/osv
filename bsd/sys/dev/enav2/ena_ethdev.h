@@ -101,7 +101,7 @@ typedef enum ena_llq_policy_t {
 } ena_llq_policy;
 
 struct ena_tx_buffer {
-	struct rte_mbuf *mbuf;
+	rte_mbuf *mbuf;
 	unsigned int tx_descs;
 	unsigned int num_of_bufs;
 	uint64_t timestamp;
@@ -111,7 +111,7 @@ struct ena_tx_buffer {
 
 /* Rx buffer holds only pointer to the mbuf - may be expanded in the future */
 struct ena_rx_buffer {
-	struct rte_mbuf *mbuf;
+	rte_mbuf *mbuf;
 	struct ena_com_buf ena_buf;
 };
 
@@ -176,7 +176,7 @@ struct __rte_cache_aligned ena_ring {
 		struct ena_tx_buffer *tx_buffer_info; /* contex of tx packet */
 		struct ena_rx_buffer *rx_buffer_info; /* contex of rx packet */
 	};
-	struct rte_mbuf **rx_refill_buffer;
+	rte_mbuf **rx_refill_buffer;
 	unsigned int ring_size; /* number of tx/rx_buffer_info's entries */
 	unsigned int size_mask;
 

@@ -1,7 +1,13 @@
 #include <bypass/dev.hh>
 #include <cstdint>
 
-void rte_eth_dev::dev_configure(uint16_t nb_rx, uint16_t nb_tx, rte_eth_conf *conf){
+eth_os eth_os::instance;
+
+void eth_os::register_port(rte_eth_dev *dev){ 
+    instance.ifs.push_back(dev);
+}
+
+int rte_eth_dev::dev_configure(uint16_t nb_rx, uint16_t nb_tx, rte_eth_conf *conf){
     data.nb_rx_queues = nb_rx;
     data.nb_tx_queues = nb_tx;
     data.dev_conf.rxmode = conf->rxmode;
@@ -11,5 +17,5 @@ void rte_eth_dev::dev_configure(uint16_t nb_rx, uint16_t nb_tx, rte_eth_conf *co
     data.rx_queues.resize(nb_rx, nullptr);
     data.tx_queue_state.resize(nb_tx, RTE_ETH_QUEUE_STATE_STOPPED);
     data.rx_queue_state.resize(nb_rx, RTE_ETH_QUEUE_STATE_STOPPED);
-    drv_configure();
+    return drv_configure();
 }

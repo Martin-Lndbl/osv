@@ -266,12 +266,12 @@ int main(int argc, char *argv[]) {
       break;
     case 3:
       pconf.rt = atoi(optarg);
-    default:
     case 4:
       conf.mtu = atoi(optarg);
       break;
     case 5:
-      mode = std::string(optarg) == "PONG" ? PONG : PING; 
+      opmode = std::string(optarg) == "PONG" ? PONG : PING; 
+      break;
     }
   }
   pconf.burst_size = 4;

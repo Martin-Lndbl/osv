@@ -11,12 +11,12 @@ struct app_config{
     uint32_t sip;
     uint32_t dip;
     uint32_t l4port;
-    uint32_t data_len;
+    uint32_t mtu = 128;
 };
 
 
 static void create_packet(const app_config& config, rte_mbuf *pkt){
-    uint16_t len = config.data_len;
+    uint16_t len = config.mtu - sizeof(rte_udp_hdr) - sizeof(rte_ipv4_hdr);
     rte_ether_hdr *eth = rte_pktmbuf_mtod(pkt, rte_ether_hdr*);
     rte_ipv4_hdr *ipv4 = reinterpret_cast<rte_ipv4_hdr*>(eth + 1);
     rte_udp_hdr *udp = reinterpret_cast<rte_udp_hdr*>(ipv4 + 1);

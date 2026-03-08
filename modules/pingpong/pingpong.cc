@@ -239,25 +239,43 @@ int main(int argc, char *argv[]) {
   sa.sa_handler = handler;
   sigaction(SIGINT, &sa, NULL);
   sigaction(SIGTERM, &sa, NULL);
-  std::string mode, sip, dip, dmac;
   port_config pconf;
-  sched::thread::current()->pin(sched::cpus.front());
   enum mode opmode = PONG;
-  std::cout << "mode" << std::endl;
-  std::cin >> mode;
-  if (mode == "ping") {
-    std::cin >> sip >> dip >> pconf.app.l4port >> dmac;
-    pconf.app.sip = inet_addr(sip.c_str());
-    pconf.app.dip = inet_addr(dip.c_str());
-    pconf.app.dst.parse_string(dmac.c_str());
-    pconf.app.data_len = tu_size - sizeof(rte_ipv4_hdr) - sizeof(rte_udp_hdr);
-    opmode = PING;
+  sched::thread::current()->pin(sched::cpus.front());
+  int opt, option_index;
+  auto& conf = pconf.app;
+  static const struct option long_options[] = {
+      {"dip", required_argument, 0, 0},
+      {"sip", required_argument, 0, 0},
+      {"dmac", required_argument, 0, 0},
+      {"rt", required_argument, 0, 0},
+      {"mtu", required_argument, 0, 0},
+      {"mode", required_argument, 0, 0},
+      {0, 0, 0, 0}};
+  while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
+         -1) {
+    switch (option_index) {
+    case 0:
+      conf.dip = inet_addr(optarg);
+      break;
+    case 1:
+      conf.sip = inet_addr(optarg);
+      break;
+    case 2:
+      conf.dst.parse_string(optarg);
+      break;
+    case 3:
+      pconf.rt = atoi(optarg);
+    default:
+    case 4:
+      conf.mtu = atoi(optarg);
+      break;
+    case 5:
+      mode = std::string(optarg) == "PONG" ? PONG : PING; 
+    }
   }
+  pconf.burst_size = 4;
   sched::update_disable_reschedule(true);
-  std::cout << "burst_size" << std::endl;
-  std::cin >> pconf.burst_size;
-  std::cout << "runtime" << std::endl;
-  std::cin >> pconf.rt;
   if (configure_port(pconf))
     return -1;
   switch (opmode) {

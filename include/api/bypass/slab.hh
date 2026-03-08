@@ -57,7 +57,7 @@ struct mbuf {
   mbuf(mbuf *next, slab_allocator *sb, uintptr_t iova, uint32_t size,
        uint16_t nb_segs, uint16_t data_len, uint16_t headroom)
       : next(next), buf_addr(reinterpret_cast<char *>(this)), pool(sb),
-        iova(iova + sizeof(mbuf) + headroom), data_offset(headroom),
+        iova(iova + sizeof(mbuf) + headroom), data_offset(headroom), pkt_len(),
         data_len(data_len), buf_len(size), refcnt(1), nb_segs(nb_segs),
         ext() {}
 
@@ -81,9 +81,9 @@ struct mbuf {
 
     uint32_t copied = 0;
     while (seg && copied < len) {
-      auto *src = seg->data<uint8_t*>() + off;
+      auto *src = seg->data<uint8_t>() + off;
       auto n = std::min<uint32_t>(seg->data_len - off, len - copied);
-      std::memcpy(static_cast<uint8_t *>(buf) + copied, src, n);
+      std::memcpy(static_cast<uint8_t*>(buf) + copied, src, n);
       copied += n;
       off = 0;
       seg = seg->next;
@@ -119,7 +119,7 @@ struct mbuf {
   void adj(uint16_t len) {
     data_offset += len;
     data_len -= len;
-    iova -= len;
+    iova += len;
   }
 };
 
@@ -213,10 +213,8 @@ public:
     auto *region = memory::alloc_huge_page(mmu::huge_page_size);
     assert(region != nullptr);
     auto *s = static_cast<slab *>(region);
-    auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab) + color;
-    color += 64;
+    auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab);
     s->iova = mmu::virt_to_phys(s);
-    s->freelist = nullptr;
     s->freelist = new (base) obj_header;
     size_t space = kSlabSize - sizeof(slab);
     size_t off = 0;
@@ -280,7 +278,6 @@ public:
   }
 
 private:
-  uint8_t color = 0;
   slab_cache cache;
 };
 

@@ -5,7 +5,7 @@
 struct dpdk_allocator {
   static std::shared_ptr<dpdk_allocator> create(const char *name, unsigned n) {
     auto *pool = rte_pktmbuf_pool_create(
-        name, n, 0, 0, RTE_MBUF_DEFAULT_BUF_SIZE, SOCKET_ID_ANY);
+        name, n, 0, 0, sant::slab_allocator::kMaxDataLen, SOCKET_ID_ANY);
     assert(pool);
     return std::make_shared<dpdk_allocator>(pool);
   }

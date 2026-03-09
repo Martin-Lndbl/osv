@@ -1,8 +1,8 @@
 #pragma once
-#include <osv/types.h>
 #include <cassert>
 #include <memory>
 
+#include <osv/types.h>
 #include <osv/mmu.hh>
 
 namespace sant {

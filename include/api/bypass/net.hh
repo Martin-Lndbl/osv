@@ -6,14 +6,19 @@
 #include <cstddef>
 #include <cstring>
 #include <cstdio>
+#include <endian.h>
+#include <sys/param.h>
 
-#define RTE_ETHER_ADDR_LEN 6
-
-static constexpr uint8_t VERSION = 4;
-static constexpr uint8_t VERSION_IHL = ((VERSION << 4) | 0x5);
+static constexpr uint8_t IPVERSION = 4;
 static constexpr uint8_t TTL = 64;
 static constexpr uint8_t RTE_ETHER_TYPE_IPV4 = 0x800;
 static constexpr uint8_t RTE_IPPROTO_UDP = 17;
+
+#define RTE_ETHER_ADDR_LEN 6
+#define RTE_IPV4_HDR_DF_SHIFT   14 
+#define RTE_IPV4_HDR_DF_FLAG    (1 << RTE_IPV4_HDR_DF_SHIFT)
+#define RTE_IPV4_MIN_IHL    (0x5)
+#define RTE_IPV4_VHL_DEF    ((IPVERSION << 4) | RTE_IPV4_MIN_IHL)
 
 struct rte_ether_addr {
   std::array<unsigned char, RTE_ETHER_ADDR_LEN> addr;
@@ -93,7 +98,8 @@ inline uint16_t _raw_cksum_reduce(uint32_t sum) {
   return (uint16_t)sum;
 }
 
-inline uint16_t phdr_cksum(rte_ipv4_hdr *ipv4, rte_udp_hdr *udp) {
+
+inline uint16_t rte_ipv4_phdr_cksum(rte_ipv4_hdr *ipv4, uint64_t ol_flags) {
   struct ipv4_psd_header {
     uint32_t src_addr; /* IP address of source host. */
     uint32_t dst_addr; /* IP address of destination host. */
@@ -106,7 +112,7 @@ inline uint16_t phdr_cksum(rte_ipv4_hdr *ipv4, rte_udp_hdr *udp) {
   psd_hdr.dst_addr = ipv4->dst_addr;
   psd_hdr.zero = 0;
   psd_hdr.proto = ipv4->next_proto_id;
-  psd_hdr.len = udp->dgram_len;
+  psd_hdr.len = htobe16(betoh16(ipv4->total_length) - sizeof(*ipv4));
   auto sum = _raw_cksum(&psd_hdr, sizeof(psd_hdr), 0);
   return _raw_cksum_reduce(sum);
 }

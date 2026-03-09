@@ -160,6 +160,9 @@ void rte_pktmbuf_free(rte_mbuf *mbuf);
 void rte_mbuf_raw_free(rte_mbuf *mbuf);
 int rte_pktmbuf_alloc_bulk(rte_mempool* pool, rte_mbuf **pkts, uint16_t size);
 void rte_pktmbuf_free_bulk(rte_mbuf **pkts, uint16_t size);
+__inline rte_mbuf* rte_pktmbuf_alloc(rte_mempool* pool){
+    return pool->alloc_default(0);
+}
 const void *rte_pktmbuf_read(rte_mbuf *, uint32_t, uint32_t, uint8_t *);
 rte_mempool *rte_pktmbuf_pool_create(const char *name, unsigned n,
                                      unsigned cache_size, uint16_t priv_size,

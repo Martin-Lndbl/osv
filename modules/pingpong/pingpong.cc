@@ -26,6 +26,7 @@
 #include <signal.h>
 #include "net.hh"
 #include <osv/sched.hh>
+#include <bypass/lcore.hh>
 
 
 #define SWAP(val1, val2)                                                       \

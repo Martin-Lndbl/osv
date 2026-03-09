@@ -1,4 +1,0 @@
-net:
-  - linkbw: 50
-  - flowbw: 8
-  - rtt: 20

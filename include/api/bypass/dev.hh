@@ -6,6 +6,8 @@
 #include <atomic>
 #include <bypass/bit.hh>
 #include <bypass/net.hh>
+#include <cstdint>
+#include <cstring>
 #include <features.h>
 #include <osv/types.h>
 #include <vector>
@@ -180,14 +182,14 @@ struct rte_eth_dev {
                               uint16_t reta_size) = 0;
 };
 
-__inline uint16_t rte_eth_dev_tx_burst(uint16_t port, uint16_t qid,
+__inline uint16_t rte_eth_tx_burst(uint16_t port, uint16_t qid,
                                        rte_mbuf **pkts, uint16_t cnt) {
   auto *eth_dev = eth_os::get_eth_for_port(port);
   assert(eth_dev);
   return eth_dev->tx_burst(qid, pkts, cnt);
 }
 
-__inline uint16_t rte_eth_dev_rx_burst(uint16_t port, uint16_t qid,
+__inline uint16_t rte_eth_rx_burst(uint16_t port, uint16_t qid,
                                        rte_mbuf **pkts, uint16_t cnt) {
   auto *eth_dev = eth_os::get_eth_for_port(port);
   assert(eth_dev);
@@ -237,15 +239,24 @@ __inline int rte_eth_dev_stop(uint16_t port){
     return eth_os::get_eth_for_port(port)->stop();
 }
 
-struct rte_eth_tx_buffer {
+__inline void rte_eth_macaddr_get(uint16_t port, rte_ether_addr* addr){
+    auto *dev = eth_os::get_eth_for_port(port);
+    *addr = dev->data.mac_addr;
+}
+
+__inline int rte_eth_dev_rss_reta_update(uint16_t port, rte_eth_rss_reta_entry64* reta, uint16_t reta_size){
+    return eth_os::get_eth_for_port(port)->rss_reta_update(reta, reta_size);
+}
+
+struct rte_eth_dev_tx_buffer {
   uint16_t size;
   uint16_t length;
   rte_mbuf *pkts[];
 
-  rte_eth_tx_buffer(uint16_t size) : size(size), length() {}
+  rte_eth_dev_tx_buffer(uint16_t size) : size(size), length() {}
 
   static constexpr size_t memsize(uint16_t cnt) {
-    return sizeof(rte_eth_tx_buffer) + cnt * sizeof(rte_mbuf *);
+    return sizeof(rte_eth_dev_tx_buffer) + cnt * sizeof(rte_mbuf *);
   }
 };
 
@@ -256,29 +267,29 @@ static inline void unsent_cb(rte_mbuf **pkts, uint16_t unsent, uint16_t port,
   auto end = now + 0 * kRetryTOus;
   auto sent = 0u;
   do {
-    sent += rte_eth_dev_tx_burst(port, qid, pkts + sent, unsent - sent);
+    sent += rte_eth_tx_burst(port, qid, pkts + sent, unsent - sent);
   } while (sent < unsent && rte_get_timer_cycles() < end);
   if (unsent - sent)
     rte_pktmbuf_free_bulk(pkts + sent, unsent - sent);
 }
 
-inline void rte_eth_tx_buffer_init(rte_eth_tx_buffer *tx_buffer,
+inline void rte_eth_tx_buffer_init(rte_eth_dev_tx_buffer *tx_buffer,
                                    uint16_t size) {
-  new (tx_buffer) rte_eth_tx_buffer(size);
+  new (tx_buffer) rte_eth_dev_tx_buffer(size);
 }
 
 inline void rte_eth_tx_buffer_flush(uint16_t port, uint16_t qid,
-                                    rte_eth_tx_buffer *tx_buffer) {
+                                    rte_eth_dev_tx_buffer *tx_buffer) {
   auto to_send = tx_buffer->length;
   if (to_send == 0)
     return;
-  auto sent = rte_eth_dev_tx_burst(port, qid, tx_buffer->pkts, to_send);
+  auto sent = rte_eth_tx_burst(port, qid, tx_buffer->pkts, to_send);
   if (sent < to_send)
     unsent_cb(tx_buffer->pkts + sent, to_send - sent, port, qid);
 }
 
-inline void rte_eth_tx_buffer(uint16_t port, uint16_t qid, rte_mbuf *pkt,
-                              rte_eth_tx_buffer *tx_buffer) {
+inline void rte_eth_tx_buffer(uint16_t port, uint16_t qid,
+                              rte_eth_dev_tx_buffer *tx_buffer, rte_mbuf *pkt) {
   tx_buffer->pkts[tx_buffer->length++] = pkt;
   if (tx_buffer->length < tx_buffer->size)
     return;

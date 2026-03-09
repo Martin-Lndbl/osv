@@ -28,7 +28,7 @@ static void create_packet(const app_config& config, rte_mbuf *pkt){
     pkt->l4_len = sizeof(*udp);
 
     len += sizeof(*ipv4);
-    ipv4->version_ihl = VERSION_IHL;
+    ipv4->version_ihl = RTE_IPV4_VHL_DEF;
     ipv4->time_to_live = TTL;
     ipv4->next_proto_id = RTE_IPPROTO_UDP;
     ipv4->fragment_offset = 0;

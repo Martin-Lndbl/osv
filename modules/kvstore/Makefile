@@ -1,9 +1,12 @@
 include ../common.gmk
 
-CXXFLAGS=-O3 -g -Wall -std=c++20 -fPIC $(COMMON)
-SRCS=$(wildcard *.cc)
+CXXFLAGS=-O3 -g -Wall -std=c++20 -fPIC $(COMMON) -Iinclude/
+SRCS=$(wildcard src/*.cc)
+SRCS+=server_main.cc
 OBJS=$(SRCS:.cc=.o)
-LIBS=-lyaml-cpp 
+DYN=$(SRCS:.cc=.so)
+D=$(SRCS:.cc=.d)
+LIBS=-lyaml-cpp -ltlx 
 
 .PHONY: module
 module: kvstore.so
@@ -14,4 +17,4 @@ kvstore.so: $(OBJS)
 	$(call quiet, $(CXX) $(CXXFLAGS) -shared -o $@ $(OBJS) $(LIBS), LINK $@)
 
 clean:
-	rm -f kvstore.so kvstore.d kvstore-stripped.so
+	rm -f $(DYN) $(D) $(OBJS) 

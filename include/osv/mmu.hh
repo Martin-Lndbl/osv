@@ -9,6 +9,7 @@
 #define MMU_HH
 
 #include "fs/fs.hh"
+#include <cstdint>
 #include <stdint.h>
 #include <boost/intrusive/set.hpp>
 #include <osv/types.h>
@@ -46,6 +47,8 @@ constexpr inline unsigned pt_index(void *virt, unsigned level)
 }
 
 struct page_allocator;
+
+uintptr_t just_walk(void* virt);
 
 struct linear_vma {
     void* _virt_addr;

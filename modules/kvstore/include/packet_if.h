@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <endian.h>
 #include <netinet/in.h>
 #include <random>
 #include <bypass/net.hh>
@@ -40,7 +41,7 @@ public:
     sim.set_rate(0.0);
   }
 
-  rte_udp_hdr *udp_header(rte_mbuf *msg, uint16_t sport, uint16_t dport,
+    rte_udp_hdr *udp_header(rte_mbuf *msg, uint16_t sport, uint16_t dport,
                           uint16_t data_len) {
     auto *udp =
         rte_pktmbuf_mtod_offset(msg, rte_udp_hdr *, protocol::defs::kudpOffset);
@@ -49,6 +50,8 @@ public:
     udp->dgram_cksum = 0;
     udp->dgram_len = htons(data_len + sizeof(rte_udp_hdr));
     msg->l4_len = sizeof(rte_udp_hdr);
+    msg->data_len += msg->l4_len;
+    msg->pkt_len += msg->l4_len;
     return udp;
   }
 
@@ -68,6 +71,8 @@ public:
     ipv4->type_of_service = 0;
     ipv4->packet_id = 0;
     msg->l3_len = sizeof(rte_ipv4_hdr);
+    msg->data_len += msg->l3_len;
+    msg->pkt_len += msg->l3_len;
 
     msg->ol_flags = 0;
     msg->ol_flags |=
@@ -82,8 +87,10 @@ public:
     rte_ether_addr_copy(&smac, &eth->src_addr);
     eth->ether_type = htons(RTE_ETHER_TYPE_IPV4);
     msg->l2_len = sizeof(rte_ether_hdr);
+    msg->data_len += msg->l2_len;
+    msg->pkt_len += msg->l2_len;
   }
-
+ 
   void consume_pkt_mbuf(mbuf *pkt, transport_config &cfg) {
 
     auto *dpdk_mbuf = rte_pktmbuf_alloc(pool->get());
@@ -98,7 +105,8 @@ public:
     auto it = arp_table.find(cfg.ip);
     assert(it != arp_table.end());
     eth_header(dpdk_mbuf, smac, it->second);
-    assert(dpdk_mbuf->pkt_len == pkt->data_len);
+    assert(dpdk_mbuf->pkt_len == pkt->data_len + dpdk_mbuf->l2_len +
+                                     dpdk_mbuf->l3_len + dpdk_mbuf->l4_len);
     qp->enqueue_pkt(dpdk_mbuf);
   }
 

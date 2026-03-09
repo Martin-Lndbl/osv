@@ -203,7 +203,9 @@ __inline int rte_eth_dev_is_valid_port(uint16_t port) {
 }
 
 __inline int rte_eth_dev_info_get(uint16_t port, rte_eth_dev_info *dev_info) {
-  return eth_os::get_eth_for_port(port)->get_dev_info(dev_info);
+  auto *dev = eth_os::get_eth_for_port(port);
+  assert(dev);
+  return dev->get_dev_info(dev_info);
 }
 
 __inline int rte_eth_dev_configure(uint16_t port, uint16_t nrx, uint16_t ntx,

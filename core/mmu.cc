@@ -167,9 +167,8 @@ uintptr_t walk_level(hw_ptep<N> ptep, uintptr_t addr){
     auto pt = ptep.read();
     if(pt.empty())
         return 0;
-    if(pt.large()){
-        return (pt.addr() | (addr & ((1ull < (12 + N * 9)) - 1)));
-    }
+    if(pt.large())
+        return (pt.addr() | (addr & ((1ull << (12 + N * 9)) - 1)));
     auto ptep_table = mmu::hw_ptep<N-1>::force(phys_cast<mmu::pt_element<N-1>>(pt.next_pt_addr()));
     auto n_ptep = ptep_table.at(mmu::pt_index(reinterpret_cast<void*>(addr), N - 1)) ;
     return walk_level<N-1>(n_ptep, addr);
@@ -181,6 +180,12 @@ uintptr_t walk_level<0>(hw_ptep<0> ptep, uintptr_t addr){
 }
 
 phys virt_to_phys_pt(void* virt);
+
+uintptr_t just_walk(void* virt){
+        auto addr = reinterpret_cast<uintptr_t>(virt);
+        auto* root_pt = mmu::get_root_pt(addr);
+        return walk_level(mmu::hw_ptep<4>::force(root_pt), addr);
+}
 
 phys virt_to_phys(void *virt)
 {

@@ -1,7 +1,9 @@
 #include <bypass/dev.hh>
+#include <bypass/lcore.hh>
 #include <cstdint>
 
 eth_os eth_os::instance;
+lcore_container lcore_container::instance;
 
 void eth_os::register_port(rte_eth_dev *dev){ 
     instance.ifs.push_back(dev);

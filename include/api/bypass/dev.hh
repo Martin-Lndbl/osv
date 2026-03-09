@@ -2,7 +2,6 @@
 #define NET_ETH_DEF_H
 
 #include "api/bypass/mem.hh"
-#include "modules/kvstore/include/util.h"
 #include <api/bypass/rss.hh>
 #include <atomic>
 #include <bypass/bit.hh>
@@ -265,15 +264,7 @@ struct rte_eth_dev_tx_buffer {
 
 static inline void unsent_cb(rte_mbuf **pkts, uint16_t unsent, uint16_t port,
                              uint16_t qid) {
-  static constexpr uint16_t kRetryTOus = 10;
-  auto now = rte_get_timer_cycles();
-  auto end = now + get_ticks_us() * kRetryTOus;
-  auto sent = 0u;
-  do {
-    sent += rte_eth_tx_burst(port, qid, pkts + sent, unsent - sent);
-  } while (sent < unsent && rte_get_timer_cycles() < end);
-  if (unsent - sent)
-    rte_pktmbuf_free_bulk(pkts + sent, unsent - sent);
+    rte_pktmbuf_free_bulk(pkts, unsent);
 }
 
 inline void rte_eth_tx_buffer_init(rte_eth_dev_tx_buffer *tx_buffer,

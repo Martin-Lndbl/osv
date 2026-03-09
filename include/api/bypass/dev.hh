@@ -197,8 +197,8 @@ __inline uint16_t rte_eth_rx_burst(uint16_t port, uint16_t qid,
 }
 
 __inline int rte_eth_dev_is_valid_port(uint16_t port) {
-  if (eth_os::instance.ifs.size() <= port)
-    return -1;
+  if (port < eth_os::instance.ifs.size())
+    return 1;
   return 0;
 }
 

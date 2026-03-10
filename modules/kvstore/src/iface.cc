@@ -71,26 +71,19 @@ std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
     port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_UDP_CKSUM;
   if (dev_info.rx_offload_capa & RTE_ETH_RX_OFFLOAD_IPV4_CKSUM)
     port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_IPV4_CKSUM;
-  if (dev_info.rx_offload_capa & RTE_ETH_RX_OFFLOAD_RSS_HASH) {
+
+  bool rss = false;
+  if (nrx > 0 && (dev_info.rx_offload_capa & RTE_ETH_RX_OFFLOAD_RSS_HASH)) {
     auto &rssconf = port_conf.rx_adv_conf.rss_conf;
     port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
     port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
     rssconf.algorithm = RTE_ETH_HASH_FUNCTION_DEFAULT;
-    rssconf.rss_key = nullptr;
-    rssconf.rss_hf =
-        RTE_ETH_RSS_NONFRAG_IPV4_UDP & dev_info.flow_type_rss_offloads;
-  }
-  bool rss = false;
-  if(nrx > 0){
-    auto& rssconf = port_conf.rx_adv_conf.rss_conf;  
-          port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
-    rssconf.algorithm = RTE_ETH_HASH_FUNCTION_DEFAULT;
     rssconf.rss_key = RSS_DEFAULT_KEY;
     rssconf.rss_key_len = RSS_KEY_LEN;
-    rssconf.rss_hf =
-        RTE_ETH_RSS_NONFRAG_IPV4_UDP & dev_info.flow_type_rss_offloads;
+    rssconf.rss_hf = dev_info.flow_type_rss_offloads;
     rss = true;
   }
+  
   retval = rte_eth_dev_configure(ifc->port, nrx, ntx, &port_conf);
   if (retval != 0)
     return nullptr;

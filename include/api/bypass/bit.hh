@@ -10,7 +10,7 @@
 #define RTE_MAX(x, y)(x > y ? x : y)
 
 __inline constexpr uint32_t rte_align32prevpow2(uint32_t num){
-    return num ? (1u << (sizeof(num) * 8 - __builtin_clz(num))) : 0;
+    return num ? (1u << (sizeof(num) * 8 - __builtin_clz(num) - 1)) : 0;
 }
 
 __inline constexpr bool rte_is_power_of_2(uint32_t val){

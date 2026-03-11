@@ -278,6 +278,7 @@ inline void rte_eth_tx_buffer_flush(uint16_t port, uint16_t qid,
   if (to_send == 0)
     return;
   auto sent = rte_eth_tx_burst(port, qid, tx_buffer->pkts, to_send);
+  tx_buffer->length = 0;
   if (sent < to_send)
     unsent_cb(tx_buffer->pkts + sent, to_send - sent, port, qid);
 }

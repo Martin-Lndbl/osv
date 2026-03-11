@@ -11,7 +11,7 @@
 
 static constexpr uint8_t IPVERSION = 4;
 static constexpr uint8_t TTL = 64;
-static constexpr uint8_t RTE_ETHER_TYPE_IPV4 = 0x800;
+static constexpr uint16_t RTE_ETHER_TYPE_IPV4 = 0x0800;
 static constexpr uint8_t RTE_IPPROTO_UDP = 17;
 
 #define RTE_ETHER_ADDR_LEN 6

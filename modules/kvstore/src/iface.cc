@@ -48,7 +48,7 @@ std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
   int retval;
   std::unique_ptr<iface> ifc(new iface()); /*c++11*/
   ifc->port = port_id;
-  struct rte_eth_dev_info dev_info;
+  struct rte_eth_dev_info dev_info{};
   struct rte_eth_rxconf rxconf{};
   struct rte_eth_txconf txconf{};
   if (!rte_eth_dev_is_valid_port(ifc->port))

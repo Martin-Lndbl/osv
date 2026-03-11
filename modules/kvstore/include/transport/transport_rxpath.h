@@ -157,7 +157,7 @@ struct transport_rxpath {
         rb.pop_front();
       }
     }
-    acb.rcv_una = next_seq;
+    acb.rcv_una = get_last_rcvd_in_seq();
   }
 
   bool inside(seq_t seq) {

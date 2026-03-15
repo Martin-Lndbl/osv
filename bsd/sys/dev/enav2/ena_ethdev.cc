@@ -8,12 +8,14 @@
 #include "base/ena_eth_com.h"
 #include "ena_ethdev.h"
 #include "ena_if.h"
+#include "msr.hh"
 #include "osv/aligned_new.hh"
 #include "osv/mmu-defs.hh"
 #include "osv/msi.hh"
 #include "osv/osv_c_wrappers.h"
 #include "osv/sched.hh"
 #include "osv/virt_to_phys.hh"
+#include "processor.hh"
 
 #include <api/bypass/bit.hh>
 #include <api/bypass/defs.hh>
@@ -1318,11 +1320,27 @@ static int ena_set_queues_placement_policy(
   /* Nothing to config, exit */
   if (ena_dev->tx_mem_queue_type == ENA_ADMIN_PLACEMENT_POLICY_HOST)
     return 0;
-
   adapter->dev_mem->map();
   ena_dev->mem_bar = const_cast<void *>(adapter->dev_mem->get_mmio());
 
   return 0;
+}
+
+void ena_eth_dev::setup_memory(){
+  auto *adapter =get<ena_adapter>();
+  auto addr = adapter->dev_mem->get_addr64();
+  auto sz = adapter->dev_mem->get_size();
+  processor::write_cr3(processor::read_cr3());
+
+  uint64_t value = addr & ((~((1ull << 12) - 1)) & (((1ull) << 52) - 1)) | 1;
+  processor::wrmsr(0x202, value);
+  value = (~(sz - 1) & ((1ull << 46) - 1))| (1ull << 11);
+  processor::wrmsr(0x203, value);
+  processor::write_cr3(processor::read_cr3());
+
+  value = processor::rdmsr(0x2ff);
+  value |= (1ull << 11);
+  processor::wrmsr(0x2ff, value);
 }
 
 static uint32_t

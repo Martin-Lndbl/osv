@@ -4,6 +4,7 @@
 #include "sgl.h"
 #include "kv_protocol.h"
 #include "server.h"
+#include "slab_allocator.h"
 #include "task/async.h"
 #include "task/task.h"
 #include <arpa/inet.h>
@@ -129,10 +130,13 @@ int run(netconfig &conf) {
   unsigned i = 0;
   uint16_t lcore_id;
   std::vector<std::shared_ptr<dpdk_allocator>> allocators;
+  std::vector<std::unique_ptr<slab_allocator>> sbs;
   std::vector<uint16_t> lcore_ids;
   allocators.reserve(nthreads);
   lcore_ids.reserve(nthreads);
+  sbs.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
+    sbs.emplace_back(std::make_unique<slab_allocator>());
     allocators.emplace_back(
         dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 4095));
     lcore_ids.push_back(lcore_id);
@@ -149,7 +153,7 @@ int run(netconfig &conf) {
     auto [port, txq, rxq] = ifc->get_slice(i);
     adapter.allocator = std::move(allocators[i]);
     adapter.iface = std::make_unique<server_iface>(
-        port, txq, rxq, conf.sip, adapter.allocator, rte_lcore_count());
+        port, txq, rxq, conf.sip, adapter.allocator, sbs[i], rte_lcore_count());
     ++i;
   }
 

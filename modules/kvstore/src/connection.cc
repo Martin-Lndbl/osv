@@ -31,7 +31,7 @@ connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
                   ntohs(cfg.transport_ports.dport),
                   ntohs(cfg.transport_ports.sport));
   auto [it, inserted] = flows.emplace(
-      ft, std::make_unique<connection>(&pkt_if, &sb, this, cfg, sport, dport));
+      ft, std::make_unique<connection>(&pkt_if, sb.get(), this, cfg, sport, dport));
   if (!inserted)
     return nullptr;
   it->second->open_connection(rx_flow_sport, rx_flow_dport);

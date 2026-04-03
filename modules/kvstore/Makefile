@@ -17,4 +17,4 @@ kvstore.so: $(OBJS)
 	$(call quiet, $(CXX) $(CXXFLAGS) -shared -o $@ $(OBJS) $(LIBS), LINK $@)
 
 clean:
-	rm -f $(DYN) $(D) $(OBJS) 
+	rm -f $(DYN) $(D) $(OBJS) kvstore.so kvstore-stripped.so

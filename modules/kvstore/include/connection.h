@@ -36,8 +36,8 @@ public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
                      uint32_t sip, std::shared_ptr<dpdk_allocator> allocator,
-                     P *parent, uint16_t cores)
-      : dev(port, txq, rxq), pkt_if(&dev, allocator, &sb, sip, port), active(),
+                     P *parent, std::unique_ptr<slab_allocator>& sb, uint16_t cores)
+      : dev(port, txq, rxq), sb(std::move(sb)), pkt_if(&dev, allocator, sb.get(), sip, port), active(),
         cores(cores), is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
@@ -99,14 +99,12 @@ public:
         ack_outstanding.push_back(con);
     }
     flush();
-
     for (auto& con: ready) {
       con.perform_recovery();
       if (con.get_state() == connection_state::DISCONNECTED)
         con.link.unlink();
     }
     ready.clear();
-
     check_timeouts();
   }
 
@@ -148,7 +146,7 @@ public:
     FASTT_LOG_DEBUG("New Connection %s \n", tuple.print().c_str());
     // swap ports since we need the rx port as src
     auto [it, inserted] = flows.emplace(
-        tuple, std::make_unique<connection>(&pkt_if, &sb, this, cfg,
+        tuple, std::make_unique<connection>(&pkt_if, sb.get(), this, cfg,
                                             tuple.dport, tuple.sport));
     if (inserted) {
       active.push_front(*it->second);
@@ -156,7 +154,7 @@ public:
     } else if (it->second->get_state() == connection_state::DISCONNECTED) {
       // if the connection has been closed, replace it
       it->second.reset();
-      it->second = std::make_unique<connection>(&pkt_if, &sb, this, cfg,
+      it->second = std::make_unique<connection>(&pkt_if, sb.get(), this, cfg,
                                                 tuple.dport, tuple.sport);
       active.push_front(*it->second);
       inserted = true;
@@ -180,7 +178,7 @@ public:
     flows.erase(ft);
   }
 
-  slab_allocator *get_allocator() { return &sb; }
+  slab_allocator *get_allocator() { return sb.get(); }
 
   __inline uint64_t get_current_timer_cycles() const { return r_ts; }
 
@@ -193,7 +191,7 @@ public:
 private:
   std::deque<std::pair<mbuf *, flow_tuple>> connection_requests;
   qpair dev;
-  slab_allocator sb;
+  std::unique_ptr<slab_allocator> sb;
   packet_if pkt_if;
   uint64_t r_ts = rte_get_timer_cycles();
   intrusive_list_t<connection> active;

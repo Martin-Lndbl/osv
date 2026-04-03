@@ -6,7 +6,7 @@ SRCS+=server_main.cc
 OBJS=$(SRCS:.cc=.o)
 DYN=$(SRCS:.cc=.so)
 D=$(SRCS:.cc=.d)
-LIBS=-lyaml-cpp -ltlx 
+LIBS=-lyaml-cpp -ltlx
 
 .PHONY: module
 module: kvstore.so

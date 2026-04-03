@@ -44,7 +44,6 @@ struct task {
 };
 
 template <typename C> void make_progress(C &con) {
-  con.perform_recovery();
   if (con.coro == std::nullopt)
     return;
   auto &prms = con.coro->promise();
@@ -58,7 +57,7 @@ template <typename C> void make_progress(C &con) {
     op_completed = true;
   } break;
   case concurrency::io_yield_type::send_yield: {
-    auto retval = con.send(*prms.segs);
+    auto retval = con.send_sgl(*prms.segs);
     if (retval == -EAGAIN)
       return;
     *prms.retval = retval <= 0 ? retval : retval + *prms.retval;
@@ -91,7 +90,7 @@ template <typename C> struct send_awaitable_sgl : public io_awaitable_sgl<C> {
   }
 
   bool await_ready() noexcept {
-    auto sent = con.send(msgl);
+    auto sent = con.send_sgl(msgl);
     if (sent == -EAGAIN)
       return false;
     retval = sent;

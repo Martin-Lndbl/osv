@@ -7,13 +7,12 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
-#include <bypass/mem.hh>
-#include <bypass/dev.hh>
+#include <minidpdk/mem.hh>
+#include <minidpdk/dev.hh>
 
 class qpair {
-  static constexpr uint16_t kDefaultInputBurstSize = 32;
-
 public:
+    static constexpr uint16_t kDefaultInputBurstSize = 64;
   qpair(uint16_t port, uint16_t txq, uint16_t rxq)
       : port(port), txq(txq), rxq(rxq),
         tx_buffer(static_cast<rte_eth_dev_tx_buffer *>(
@@ -38,6 +37,10 @@ public:
   }
 
   void flush() { rte_eth_tx_buffer_flush(port, txq, tx_buffer); }
+
+  uint16_t get_rx_qid() const{
+      return rxq;
+  }
 
 private:
   static void unsent_cb(rte_mbuf** pkts, uint16_t unsent, void* userdata){

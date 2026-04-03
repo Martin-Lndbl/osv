@@ -8,8 +8,8 @@
 #include <format>
 #include <string>
 #include <utility>
-#include <bypass/time.hh>
-#include <bypass/util.hh>
+#include <minidpdk/time.hh>
+#include <minidpdk/util.hh>
 #undef hidden
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <boost/intrusive/list.hpp>

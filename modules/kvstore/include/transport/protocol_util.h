@@ -12,7 +12,6 @@ inline void extract_ports(flow_tuple &ft, mbuf *pkt) {
 struct msg_frame_desc {
   seq_t seq, ack;
   uint16_t crd;
-  bool eom;
   bool ack_frame, sack;
 };
 
@@ -28,7 +27,7 @@ struct builder {
     ft->crd = desc.crd;
     ft->ackframe = desc.ack_frame;
     ft->sack = desc.sack;
-    ft->eom = desc.eom;
+    ft->ts = 0;
     ft->type = protocol::pkt_type::FT_MSG;
   }
 
@@ -39,6 +38,7 @@ struct builder {
     ft->ack = ack;
     ft->sack = is_sack;
     ft->crd = 0;
+    ft->ts = 0;
     ft->type = protocol::pkt_type::FT_ACK;
   }
 
@@ -50,6 +50,7 @@ struct builder {
     ft->ackframe = 0;
     ft->sack = 0;
     ft->crd = budget;
+    ft->ts = 0;
     ft->type = protocol::pkt_type::FT_SYN;
   }
 
@@ -62,6 +63,7 @@ struct builder {
     ft->ack = ack;
     ft->crd = wnd;
     ft->ackframe = is_ack_frame;
+    ft->ts = 0;
     ft->type = protocol::pkt_type::FT_CRD_UPDATE;
   }
 
@@ -75,6 +77,7 @@ struct builder {
     ft->seq = seq;
     ft->ackframe = is_ack_frame;
     ft->sack = 0;
+    ft->ts = 0;
     ft->type = protocol::pkt_type::FT_SYN_ACK;
   }
 
@@ -86,6 +89,7 @@ struct builder {
     ft->seq = seq;
     ft->ack = ack;
     ft->ackframe = is_ack_frame;
+    ft->ts = 0;
     ft->type = protocol::pkt_type::FT_DONE;
   }
 };

@@ -1,8 +1,8 @@
 #ifndef HEADERS_H
 #define HEADERS_H
 
-#include <api/bypass/mem.hh>
-#include <bypass/net.hh>
+#include <api/minidpdk/mem.hh>
+#include <minidpdk/net.hh>
 #include <endian.h>
 
 struct app_config{

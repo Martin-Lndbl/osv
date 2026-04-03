@@ -4,9 +4,9 @@
 #include "util.h"
 #include <cstdint>
 #include <memory>
-#include <bypass/dev.hh>
-#include <bypass/defs.hh>
-#include <bypass/lcore.hh>
+#include <minidpdk/dev.hh>
+#include <minidpdk/defs.hh>
+#include <minidpdk/lcore.hh>
 
 static uint8_t RSS_DEFAULT_KEY[] = {
     0xbe, 0xac, 0x01, 0xfa, 0x6a, 0x42, 0xb7, 0x3b, 0x80, 0x30,
@@ -43,7 +43,7 @@ static inline int setup_reta(uint16_t port, uint32_t nrx, uint32_t reta_size){
 }
 
 std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
-                                           uint16_t nrx, std::vector<std::shared_ptr<dpdk_allocator>>& pools) {
+                                           uint16_t nrx, std::vector<std::shared_ptr<dpdk_allocator>>& pools, const std::vector<uint16_t>& lcore_ids) {
   uint16_t nb_rxd, nb_txd;
   int retval;
   std::unique_ptr<iface> ifc(new iface()); /*c++11*/
@@ -73,7 +73,7 @@ std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
     port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_IPV4_CKSUM;
 
   bool rss = false;
-  if (nrx > 0 && (dev_info.rx_offload_capa & RTE_ETH_RX_OFFLOAD_RSS_HASH)) {
+  if (nrx > 1) {
     auto &rssconf = port_conf.rx_adv_conf.rss_conf;
     port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
     port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
@@ -95,11 +95,10 @@ std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
   txconf.offloads = port_conf.txmode.offloads;
   rxconf = dev_info.default_rxconf;
   rxconf.offloads = port_conf.rxmode.offloads;
-  uint16_t lcore_id = 0;
   uint16_t setup_tx = 0;
   uint16_t setup_rx = 0;
   uint16_t i = 0;
-  RTE_LCORE_FOREACH(lcore_id) {
+  for(auto lcore_id : lcore_ids) {
     if (rte_eth_rx_queue_setup(ifc->port, setup_rx++, nb_rxd,
                                rte_lcore_to_socket_id(lcore_id), &rxconf,
                                pools[i]->get()))

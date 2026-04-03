@@ -1,11 +1,13 @@
 #pragma once
+#include <minidpdk/slab.hh>
 #include <memory>
-#include <bypass/mem.hh>
+#include <minidpdk/mem.hh>
 
 struct dpdk_allocator {
+  using backend_data = minidpdk::rte_mbuf_ext_shared_info;  
   static std::shared_ptr<dpdk_allocator> create(const char *name, unsigned n) {
     auto *pool = rte_pktmbuf_pool_create(
-        name, n, 0, 0, sant::slab_allocator::kMaxDataLen, SOCKET_ID_ANY);
+        name, n, 0, 0, minidpdk::slab_allocator::kMaxDataLen, SOCKET_ID_ANY);
     assert(pool);
     return std::make_shared<dpdk_allocator>(pool);
   }

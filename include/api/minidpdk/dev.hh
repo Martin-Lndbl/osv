@@ -1,11 +1,11 @@
 #ifndef NET_ETH_DEF_H
 #define NET_ETH_DEF_H
 
-#include "api/bypass/mem.hh"
-#include <api/bypass/rss.hh>
+#include "api/minidpdk/mem.hh"
+#include <api/minidpdk/rss.hh>
 #include <atomic>
-#include <bypass/bit.hh>
-#include <bypass/net.hh>
+#include <minidpdk/bit.hh>
+#include <minidpdk/net.hh>
 #include <cstdint>
 #include <cstring>
 #include <features.h>

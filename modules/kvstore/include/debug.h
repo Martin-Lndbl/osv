@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstdint>
-#include <bypass/mem.hh>
+#include <minidpdk/mem.hh>
 #define DEBUG 1
 void dump_pkt(rte_mbuf *msg, uint16_t len);
 

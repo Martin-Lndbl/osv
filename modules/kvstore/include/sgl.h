@@ -35,14 +35,10 @@ struct sgl{
 
     void add_segment_safe(mbuf_ptr &&ptr){
         if(!head){
-            segs = ptr->nb_segs;
-            size = ptr->data_len;
             head = std::move(ptr);
-            tail = head->last_seg();
+            tail = head->last_seg(size, segs);
         }else{
-            segs += ptr->nb_segs;
-            size += ptr->data_len;
-            auto *last = ptr->last_seg();
+            auto *last = ptr->last_seg(size, segs);
             tail->next = ptr.release();
             tail = last;
             assert(tail != nullptr);
@@ -61,6 +57,26 @@ struct sgl{
 
     bool empty() const{
         return head == nullptr;
+    }
+
+    void combine(sgl& other){
+        tail->next = other.head.release();
+        tail = other.tail;
+        size += other.size;
+        segs += other.segs;
+    }
+
+    mbuf* alloc_message(slab_allocator &slab, size_t len){
+        mbuf *first = nullptr;
+        while(len > 0){
+            auto chunk = static_cast<uint16_t>(std::min(len, (size_t)slab_allocator::kMaxDataLen));
+            auto seg = slab.alloc_default_safe(chunk);
+            add_segment_safe(std::move(seg));
+            if(!first)
+                first = tail;
+            len -= chunk;
+        }
+        return first;
     }
 
 };

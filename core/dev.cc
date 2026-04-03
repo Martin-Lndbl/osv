@@ -1,5 +1,5 @@
-#include <bypass/dev.hh>
-#include <bypass/lcore.hh>
+#include <minidpdk/dev.hh>
+#include <minidpdk/lcore.hh>
 #include <cstdint>
 
 eth_os eth_os::instance;

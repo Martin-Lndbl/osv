@@ -1,16 +1,16 @@
 #include <algorithm>
 #include <arpa/inet.h>
-#include <bypass/mem.hh>
-#include <bypass/net.hh>
-#include <bypass/time.hh>
-#include <bypass/util.hh>
+#include <minidpdk/mem.hh>
+#include <minidpdk/net.hh>
+#include <minidpdk/time.hh>
+#include <minidpdk/util.hh>
 #include <cassert>
 #include <cerrno>
 
 #include <algorithm>
-#include <api/bypass/dev.hh>
-#include <api/bypass/mem.hh>
-#include <bypass/defs.hh>
+#include <api/minidpdk/dev.hh>
+#include <api/minidpdk/mem.hh>
+#include <minidpdk/defs.hh>
 #include <cstring>
 #include <ctime>
 #include <endian.h>
@@ -24,9 +24,10 @@
 #include <unistd.h>
 #include <vector>
 #include <signal.h>
+#include "msr.hh"
 #include "net.hh"
 #include <osv/sched.hh>
-#include <bypass/lcore.hh>
+#include <minidpdk/lcore.hh>
 
 
 #define SWAP(val1, val2)                                                       \
@@ -236,6 +237,10 @@ enum mode { PING, PONG };
 static constexpr uint16_t tu_size = 60 - sizeof(rte_ether_hdr);
 
 int main(int argc, char *argv[]) {
+ auto val = processor::rdmsr(0x200);
+  auto mask = processor::rdmsr(0x201); 
+ printf("%lx %lx\n", val, mask);
+  /*  
   struct sigaction sa{};
   sa.sa_handler = handler;
   sigaction(SIGINT, &sa, NULL);
@@ -298,4 +303,5 @@ int main(int argc, char *argv[]) {
 
   std::cerr << "done" << std::endl;
   close_port(pconf);
+  */
 }

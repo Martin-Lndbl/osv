@@ -1,16 +1,26 @@
-#include <bypass/mem.hh>
-#include <bypass/slab.hh>
+#include <minidpdk/mem.hh>
+#include <minidpdk/slab.hh>
 #include <cassert>
 #include <cstdint>
 #include <malloc.h>
 #include <bsd/porting/netport.h>
 #include <osv/trace.hh>
 
+void inline free_internal(rte_mbuf* buf){
+  if(buf->ol_flags & RTE_MBUF_F_EXTERNAL){
+      assert(buf->shinfo->refcnt > 0);
+      --buf->shinfo->refcnt;
+      if(!buf->shinfo->refcnt)
+          buf->shinfo->free_cb(buf->buf_addr, buf->shinfo->fcb_opaque);
+  }
+  minidpdk::mbuf_free(buf);
+}
+
 void rte_pktmbuf_free(rte_mbuf* mbuf){
-    sant::mbuf_free(mbuf);
+    free_internal(mbuf);
 }
 void rte_mbuf_raw_free(rte_mbuf* mbuf){
-    sant::mbuf_free(mbuf);
+    free_internal(mbuf);
 }
 
 
@@ -23,7 +33,7 @@ int rte_pktmbuf_alloc_bulk(rte_mempool* pool, rte_mbuf** pkts, uint16_t size){
 
 void rte_pktmbuf_free_bulk(rte_mbuf** pkts, uint16_t size){
     for(auto i = 0u; i < size; ++i)
-        sant::mbuf_free(pkts[i]);
+        free_internal(pkts[i]);
 }
 
 const void* rte_pktmbuf_read(rte_mbuf *m, uint32_t off,
@@ -35,13 +45,13 @@ const void* rte_pktmbuf_read(rte_mbuf *m, uint32_t off,
 rte_mempool *rte_pktmbuf_pool_create(const char *name, unsigned n,
                                      unsigned cache_size, uint16_t priv_size,
                                      uint16_t data_room_size, int socket_id){
-    assert(data_room_size <= sant::slab_allocator::kMaxDataLen);
+    assert(data_room_size <= minidpdk::slab_allocator::kMaxDataLen);
     (void)cache_size;
     (void)priv_size;
     (void)socket_id;
     (void)data_room_size;
-    auto *slab = malloc(sizeof(sant::slab_allocator));
-    return new(slab) sant::slab_allocator();
+    auto *slab = malloc(sizeof(minidpdk::slab_allocator));
+    return new(slab) minidpdk::slab_allocator();
 }
 void rte_mempool_free(rte_mempool *pool){
     pool->~slab_allocator();

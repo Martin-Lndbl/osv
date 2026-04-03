@@ -1,7 +1,7 @@
 #include "debug.h"
 #include <cstdint>
 #include <cstdio>
-#include <bypass/mem.hh>
+#include <minidpdk/mem.hh>
 
 void dump_pkt(rte_mbuf *msg, uint16_t len) {
   static constexpr size_t bytes_per_line = 16;

@@ -1,9 +1,9 @@
 #ifndef BYPASS_MEM_H
 #define BYPASS_MEM_H
 
-#include "bypass/slab.hh"
-#include <bypass/time.hh>
-#include <bypass/util.hh>
+#include "minidpdk/slab.hh"
+#include <minidpdk/time.hh>
+#include <minidpdk/util.hh>
 #include <cassert>
 #include <cstdint>
 #include <osv/types.h>
@@ -152,9 +152,10 @@ template <typename T, T alignment> static constexpr T align(T val) {
 
 #define rte_free free
 
-using rte_mbuf = sant::mbuf;
-using rte_pktmbuf_pool = sant::slab_allocator;
+using rte_mbuf = minidpdk::mbuf;
+using rte_pktmbuf_pool = minidpdk::slab_allocator;
 using rte_mempool = rte_pktmbuf_pool;
+using rte_mbuf_ext_shared_info = minidpdk::rte_mbuf_ext_shared_info;
 
 void rte_pktmbuf_free(rte_mbuf *mbuf);
 void rte_mbuf_raw_free(rte_mbuf *mbuf);
@@ -168,6 +169,26 @@ rte_mempool *rte_pktmbuf_pool_create(const char *name, unsigned n,
                                      unsigned cache_size, uint16_t priv_size,
                                      uint16_t data_room_size, int socket_id);
 void rte_mempool_free(rte_mempool *pool);
+
+inline void rte_pktmbuf_attach_extbuf(rte_mbuf* m, void* buf_addr, uintptr_t iova, uint16_t buf_len, rte_mbuf_ext_shared_info* shinfo){
+    m->shinfo = shinfo;
+    m->buf_addr = static_cast<char*>(buf_addr);
+    m->iova = iova;
+    m->buf_len = buf_len;
+    m->data_len = 0;
+    m->data_offset = 0;
+    m->ol_flags |= RTE_MBUF_F_EXTERNAL;
+}
+
+inline int rte_pktmbuf_chain(rte_mbuf* head, rte_mbuf *tail){
+    auto *cur_tail = head->last_seg();
+    cur_tail->next = tail;
+    head->nb_segs += tail->nb_segs;
+    head->pkt_len += tail->pkt_len;
+    tail->pkt_len = tail->data_len;
+    return 0;
+
+}
 
 #define rte_pktmbuf_mtod(m, t) m->data<std::remove_pointer<t>::type>()
 #define rte_pktmbuf_mtod_offset(m, t, o)                                       \

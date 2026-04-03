@@ -4,10 +4,10 @@
 #include "sgl.h"
 #include "slab_allocator.h"
 #include "transport/seq.h"
-#include "util.h"
 
 #include <algorithm>
 #include <bitset>
+#include <cassert>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -18,9 +18,9 @@
 
 struct ack_cb {
   static constexpr size_t kSACKCnt = 3;
-  seq_t rcv_una{~0u};
-  seq_t rcv_acked{~0u};
-  seq_t rcv_high{~0u};
+  seq_t rcv_una;
+  seq_t rcv_acked;
+  seq_t rcv_high;
   uint16_t pending_dup_acks = 0;
 
   void mark_as_acked(seq_t seq) {
@@ -37,6 +37,8 @@ struct ack_cb {
   bool has_unacked_pkts() const {
     return rcv_una > rcv_acked || pending_dup_acks > 0;
   }
+
+  ack_cb(seq_t seq = {~0u}) : rcv_una(seq), rcv_acked(seq), rcv_high(seq) {}
 
   void add_dump_ack() {
     // we send at most kSACKCnt
@@ -78,19 +80,11 @@ struct reorder_buffer {
 };
 
 struct transport_rxpath {
-  struct message {
-    mbuf_ptr head;
-    uint64_t size : 48;
-    uint16_t segs : 16;
-
-    message(mbuf *head, uint64_t size, uint16_t segs)
-        : head(mbuf_take_owner_ship(head)), size(size), segs(segs) {}
-  };
   // reserve some headroom
-  static constexpr unsigned kLowThreshold = 128;
-  static constexpr unsigned kMaxGrantSize = 128;
+  static constexpr unsigned kMaxGrantSize = 256;
   static constexpr unsigned kMaxBitMapSize = 2 * kMaxGrantSize;
-  transport_rxpath() : max_rx_in_window(~0), next_seq() {}
+  transport_rxpath(seq_t max_rx_in_window = {~0u}, seq_t next_seq = {0})
+      : max_rx_in_window(max_rx_in_window), next_seq(next_seq) {}
 
   seq_t get_last_rcvd_in_seq() const { return seq_t{next_seq - 1}; }
 
@@ -104,39 +98,28 @@ struct transport_rxpath {
   }
 
   void insert(seq_t seq, mbuf *pkt, ack_cb &acb) {
-    assert(inside(seq));
-    assert(!wnd.test(index(seq)));
     if (seq > acb.rcv_high) {
       acb.rcv_high = seq;
       max_rx_in_window = seq;
     }
+    assert(max_rx_in_window - next_seq + 1 <= kMaxBitMapSize);
     wnd.set(index(seq));
     reassemble(seq, mbuf_take_owner_ship(pkt), acb);
     assert(acb.rcv_high == max_rx_in_window);
   }
 
-  void reassemble_single_msg(mbuf *pkt) {
+  void put_dgram(mbuf_ptr &&pkt) {
     auto *hdr = pkt->data<protocol::ft_header>();
     // control frames are freed
     if (hdr->type != protocol::pkt_type::FT_MSG) {
       seen_done = hdr->type == protocol::pkt_type::FT_DONE;
-      mbuf_free(pkt);
       return;
     }
-    reassembly.segs += pkt->nb_segs;
-    reassembly.used_budget += pkt->nb_segs;
-    bool end = hdr->eom;
     pkt->adj(sizeof(protocol::ft_header));
-    reassembly.size += pkt->data_len;
-    mbuf::merge(reassembly.first, reassembly.last, pkt);
-    if (end) {
-      out.emplace_back(reassembly.first, reassembly.size, reassembly.segs);
-      reassembly.reset();
-      reassembly.size = 0;
-    }
+    out.emplace_back(std::move(pkt));
   }
 
-  bool empty() const { return out.empty() && reassembly.first == nullptr; }
+  bool empty() const { return out.empty(); }
 
   void reassemble(seq_t seq, mbuf_ptr &&pkt, ack_cb &acb) {
     if (seq != next_seq) {
@@ -145,7 +128,7 @@ struct transport_rxpath {
       rb.insert(seq, std::move(pkt));
     } else {
       assert(wnd.test(index(seq)));
-      reassemble_single_msg(pkt.release());
+      put_dgram(std::move(pkt));
       wnd.reset(index(next_seq));
       ++next_seq;
       while (wnd.test(index(next_seq))) {
@@ -153,7 +136,7 @@ struct transport_rxpath {
         assert(rb.next_buffered_seq() == next_seq);
         wnd.reset(index(next_seq));
         ++next_seq;
-        reassemble_single_msg(rb.front().release());
+        put_dgram(std::move(rb.front()));
         rb.pop_front();
       }
     }
@@ -171,7 +154,7 @@ struct transport_rxpath {
 
   bool has_holes() { return max_rx_in_window != next_seq - 1; }
 
-  uint16_t copy_bitset(protocol::ft_sack_payload *data) {
+  uint16_t pack_sack(protocol::ft_sack_payload *data) {
     uint16_t id = 0;
     seq_t highest_seq = next_seq + protocol::ft_sack_payload::kBitMapLen * 64;
     if (likely(highest_seq > max_rx_in_window))
@@ -182,51 +165,52 @@ struct transport_rxpath {
             sizeof(
                 uint64_t)); /* 64 since least_in_window is part of the window */
 
-    for (auto i = next_seq; i <= max_rx_in_window; ++i, ++id) {
-      auto ind = get_bit_indices_64(id);
-      data->bit_map[ind.first] |= static_cast<uint64_t>(wnd[index(i)])
-                                  << ind.second;
+    for (auto i = next_seq; i <= highest_seq; ++i, ++id) {
+      data->bit_map[id / 64] |= static_cast<uint64_t>(wnd[index(i)])
+                                << (id & 63);
     }
     data->bit_map_len = id;
     return id;
   }
 
   bool has_buffered_mbufs_frags() const {
-    return out.size() > 0 || reassembly.first != nullptr;
+    return out.size() > 0;
   }
 
   ssize_t read(sgl &msgl) {
-    if (out.empty())
+    if (out.empty()) 
       return -EAGAIN;
-    auto &buffered = out.front();
-    msgl.head = std::move(buffered.head);
-    msgl.size = buffered.size;
-    msgl.segs = buffered.segs;
-    out.pop_front();
-    return msgl.size;
+    ssize_t rx = 0;
+    while (!out.empty()) {
+      auto &buffered = out.front();
+      msgl.add_segment_safe(std::move(buffered)); 
+      ++crds.crds_returned;
+      ++rx;
+      out.pop_front();
+    }
+    return rx;
   }
 
   unsigned get_available_wnd() const { return kMaxGrantSize; }
 
-  ~transport_rxpath() {
-    if (reassembly.first)
-      mbuf_free(reassembly.first);
+  bool return_stalled_crds() const {
+    return crds.crds_returned >= kMaxGrantSize / 2;
   }
 
-  // pkt reassmbly and buffering
+  uint16_t prepare_return_stalled_crds() {
+    auto crds_returned = crds.crds_returned;
+    crds.crds_returned = 0;
+    return crds_returned;
+  }
+
+  ~transport_rxpath() = default;
+
   struct {
-    mbuf *first = nullptr, *last = nullptr;
-    uint64_t size = 0;
-    uint32_t segs = 0;
-    uint32_t used_budget = 0;
-    void reset() {
-      first = last = nullptr;
-      segs = 0;
-    }
-  } reassembly;
+    uint16_t crds_returned = 0;
+  } crds;
 
   reorder_buffer rb;
-  std::deque<message> out;
+  std::deque<mbuf_ptr> out;
 
   // connection state
   std::bitset<kMaxBitMapSize> wnd;

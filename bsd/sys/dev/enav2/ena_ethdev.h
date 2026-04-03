@@ -6,10 +6,10 @@
 #ifndef _ENA_ETHDEV_H_
 #define _ENA_ETHDEV_H_
 
-#include <api/bypass/mem.hh>
-#include <api/bypass/net.hh>
-#include <api/bypass/time.hh>
-#include <api/bypass/util.hh>
+#include <api/minidpdk/mem.hh>
+#include <api/minidpdk/net.hh>
+#include <api/minidpdk/time.hh>
+#include <api/minidpdk/util.hh>
 #include <cstdint>
 #include "base/ena_com.h"
 #include "ena_if.h"

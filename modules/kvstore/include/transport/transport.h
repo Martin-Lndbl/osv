@@ -9,29 +9,16 @@
 #include "packet_if.h"
 #include "protocol.h"
 #include "protocol_util.h"
+#include "task/task.h"
 
 #include "sgl.h"
 #include "slab_allocator.h"
+#include "transport/congestion_control.h"
 #include "transport/seq.h"
-#include "transport_txpath.h"
 #include "transport_rxpath.h"
+#include "transport_stats.h"
+#include "transport_txpath.h"
 #include "util.h"
-
-struct transport_statistics {
-  uint64_t retransmitted;
-  seq_t acked;
-  uint64_t sent, retransmissions;
-  double rtt;
-  transport_statistics(uint64_t retransmitted, seq_t acked, uint64_t sent,
-                       uint64_t retransmissions, uint64_t rtt_est)
-      : retransmitted(retransmitted), acked(acked), sent(sent),
-        retransmissions(retransmissions) {
-    rtt = static_cast<double>(rtt_est);
-  }
-
-  transport_statistics()
-      : retransmitted(), acked(), sent(), retransmissions(), rtt() {}
-};
 
 enum class connection_state {
   ESTABLISHING,
@@ -40,94 +27,96 @@ enum class connection_state {
   DISCONNECTED
 };
 
-class connection;
-template <typename P = packet_if> class transport {
-  friend class connection;
+class connection_manager;
+
+template <typename P = packet_if, typename M = connection_manager>
+class transport {
+  friend M;
 
 public:
-  static constexpr uint16_t kMaxPayload = 1500 - protocol::defs::kHeaderMTUlen;
   struct {
     uint64_t sent = 0;
     uint64_t retransmissions = 0;
   } stats;
 
-  transport(P *pkt_sink, slab_allocator *sb, transport_config cfg,
+  transport(P *pkt_sink, slab_allocator *sb, M *manager, transport_config cfg,
             uint16_t sport, uint16_t dport)
-      : trx(), builder(sport, dport), cfg(cfg), ttx(), sb(sb), acb(),
-        pkt_if(pkt_sink) {}
+      : cc(get_ticks_us() * 100), trx(), builder(sport, dport), cfg(cfg),
+        ttx(cc), sb(sb), acb(), manager(manager), pkt_if(pkt_sink) {}
 
   void perform_recovery() {
-    ttx.advance_recovery(
-        [&](mbuf *pkt) { pkt_if->consume_pkt_mbuf(pkt, cfg); });
+    ttx.advance_recovery([&](mbuf *pkt) { pkt_if->consume_pkt_mbuf(pkt, cfg); },
+
+                         manager->get_current_timer_cycles());
   }
 
   void check_timeout(uint64_t now) {
     if (cstate == connection_state::DISCONNECTED)
       return;
+    if (cstate == connection_state::ESTABLISHED && trx.return_stalled_crds())
+      return_crds(now);
     if (ttx.all_acked())
       return;
     if (ttx.check_timeout(now)) {
-      ttx.rto_retransmit(now);
-      ttx.rearm(now);
+      ttx.rto_retransmit(
+          now, [&](mbuf *pkt) { pkt_if->consume_pkt_mbuf(pkt, cfg); });
+
+      // retransmit more if we have space
+      perform_recovery();
     }
   }
 
-  void send_ctrl(uint16_t wnd) {
-    auto now = rte_get_timer_cycles();
+  void return_crds(uint64_t now) {
     auto *pkt = sb->alloc_default(sizeof(protocol::ft_header));
+    auto crd = trx.prepare_return_stalled_crds();
+    auto ackframe = false;
     ttx.record_ctrl_pkt(
         pkt,
-        [&](mbuf *pkt, seq_t seq) {
-          auto ack = trx.get_last_rcvd_in_seq();
-          bool ackframe = acb.has_unacked_pkts() && !trx.has_holes();
-          if (ackframe)
-            acb.mark_as_acked(ack);
-          builder.prepare_ctrl_pkt(pkt, seq, ack, wnd, ackframe);
+        [&](mbuf *msg, seq_t seq) {
+          builder.prepare_ctrl_pkt(msg, seq, {0}, crd, ackframe);
         },
         now);
     pkt_if->consume_pkt_mbuf(pkt, cfg);
   }
 
-  bool acknowledge() {
+  unsigned acknowledge() {
     mbuf_ptr msg = mbuf_take_owner_ship(nullptr);
     bool is_sack = trx.has_holes();
     seq_t ack = trx.get_last_rcvd_in_seq();
     if (is_sack) {
       if (!acb.has_unacked_pkts())
-        return false;
+        return 0;
       msg = sb->alloc_default_safe(sizeof(protocol::ft_header) +
                                    sizeof(protocol::ft_sack_payload));
       if (!msg)
-        return false;
+        return acb.pending_dup_acks;
       auto *sack_payload =
           msg->data<protocol::ft_sack_payload>(sizeof(protocol::ft_header));
-      trx.copy_bitset(sack_payload);
-      acb.mark_as_acked(acb.rcv_una);
+      trx.pack_sack(sack_payload);
+      acb.mark_as_acked(ack);
       FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %u\n",
                       sack_payload->bit_map_len, ack.v);
     } else {
       if (!acb.has_unacked_pkts())
-        return false;
+        return 0;
       msg = sb->alloc_default_safe(sizeof(protocol::ft_header));
       if (!msg)
-        return false;
-      acb.mark_as_acked(acb.rcv_una);
+        return 1;
+      acb.mark_as_acked(ack);
       FASTT_LOG_DEBUG("Sending ACK ack=%u\n", ack.v);
     }
-    if (trx.seen_done) {
-      assert(cstate == connection_state::DISCONNECTING);
+    if (trx.seen_done)
       cstate = connection_state::DISCONNECTED;
-    }
 
     builder.prepare_ack_pkt(msg.get(), ack, is_sack);
     pkt_if->consume_pkt_mbuf(msg.get(), cfg);
-    return true;
+    return acb.pending_dup_acks;
   }
 
   bool check_pkt(mbuf *pkt, seq_t seq) {
     if (trx.is_retransmission(seq)) {
       ++stats.retransmissions;
-      if(!acb.pending_dup_acks)
+      if (!acb.pending_dup_acks)
         acb.add_dump_ack();
       mbuf_free(pkt);
       return false;
@@ -140,17 +129,15 @@ public:
 
   bool process_pkt(mbuf *msg) {
     auto *hdr = msg->data<const protocol::ft_header>();
-    auto ts = rte_get_timer_cycles();
+    auto ts = manager->get_current_timer_cycles();
     switch (hdr->type) {
     case protocol::pkt_type::FT_MSG: {
       FASTT_LOG_DEBUG("Got new msg seq=%u ack=%u ackframe=%u wnd=%u\n",
                       hdr->seq.v, hdr->ack.v, hdr->ackframe, hdr->crd);
       if (!check_pkt(msg, hdr->seq))
         return false;
-      if (hdr->ackframe) {
+      if (hdr->ackframe)
         ttx.acknowledge(hdr->ack, ts);
-        ttx.detect_loss(ts);
-      }
       if (hdr->crd)
         ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
@@ -162,9 +149,9 @@ public:
       if (hdr->sack) {
         auto *sack_payload =
             msg->data<protocol::ft_sack_payload>(sizeof(protocol::ft_header));
-        ttx.acknowledge_sack(sack_payload, ts);
+        ttx.acknowledge_sack(sack_payload, hdr->ack, ts);
+        ttx.detect_loss(ts);
       }
-      ttx.detect_loss(ts);
       if (cstate == connection_state::DISCONNECTING && ttx.all_acked())
         cstate = connection_state::DISCONNECTED;
       assert(hdr->crd == 0);
@@ -185,7 +172,7 @@ public:
       break;
     }
     case protocol::pkt_type::FT_SYN_ACK: {
-      FASTT_LOG_DEBUG("Got CLR_TO_SD seq=%u ack=%u wnd=%u\n", hdr->seq.v,
+      FASTT_LOG_DEBUG("Got FT_SYN_ACK seq=%u ack=%u wnd=%u\n", hdr->seq.v,
                       hdr->ack.v, hdr->crd);
       if (!check_pkt(msg, hdr->seq))
         return false;
@@ -200,24 +187,22 @@ public:
       FASTT_LOG_DEBUG("Got WND_RET seq=%u wnd=%u\n", hdr->seq.v, hdr->crd);
       if (!check_pkt(msg, hdr->seq))
         return false;
-      if (hdr->ackframe) {
+      if (hdr->ackframe)
         ttx.acknowledge(hdr->ack, ts);
-        ttx.detect_loss(ts);
-      }
       ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
       break;
     }
     case protocol::pkt_type::FT_DONE: {
       FASTT_LOG_DEBUG("Got DONE seq=%u ack=%u\n", hdr->seq.v, hdr->ack.v);
-      if(trx.is_retransmission(hdr->seq)){
-          ++acb.pending_dup_acks;
-          acknowledge();
-          mbuf_free(msg);
-          return false;
-      }else if(trx.exceeds_capacity(hdr->seq)){
-          mbuf_free(msg);
-          return false;
+      if (trx.is_retransmission(hdr->seq)) {
+        ++acb.pending_dup_acks;
+        acknowledge();
+        mbuf_free(msg);
+        return false;
+      } else if (trx.exceeds_capacity(hdr->seq)) {
+        mbuf_free(msg);
+        return false;
       }
       ttx.acknowledge(hdr->ack, ts);
       // if the connection is done and only the last packet if missing proceed
@@ -235,7 +220,9 @@ public:
   }
 
   void close_connection() {
-    auto now = rte_get_timer_cycles();
+    // just send for now
+    // we wait till everything is acked anyway because of RPC pattern
+    auto now = manager->get_current_timer_cycles();
     auto *pkt = sb->alloc_default(sizeof(protocol::ft_header));
     ttx.record_ctrl_pkt(
         pkt,
@@ -260,16 +247,14 @@ public:
         msg->data<protocol::ft_init_payload>(sizeof(protocol::ft_header));
     init_payload->sport = rx_flow_sport;
     init_payload->dport = rx_flow_dport;
-    auto now = rte_get_timer_cycles();
+    auto now = manager->get_current_timer_cycles();
     ttx.record_ctrl_pkt(
         msg,
         [&, budget = trx.get_available_wnd()](mbuf *msg, seq_t seq) {
-          FASTT_LOG_DEBUG("Sent SYN seq=%u wnd=%u flow=%s\n", seq.v, budget,
-                          get_flow_tuple().print().c_str());
           builder.prepare_init_header(msg, seq, budget);
         },
         now);
-    ttx.rearm(rte_get_timer_cycles());
+    ttx.rearm(manager->get_current_timer_cycles());
     auto *hdr = msg->data<protocol::ft_header>();
     assert(hdr->type == protocol::FT_SYN);
     FASTT_LOG_DEBUG("Sent SYN seq=%u wnd=%u flow=%s\n", hdr->seq.v, hdr->crd,
@@ -280,7 +265,7 @@ public:
   void accept_connection() {
     auto *pkt = sb->alloc_default(sizeof(protocol::ft_header));
     auto ack = trx.get_last_rcvd_in_seq();
-    auto now = rte_get_timer_cycles();
+    auto now = manager->get_current_timer_cycles();
     ttx.record_ctrl_pkt(
         pkt,
         [&, budget = trx.get_available_wnd()](mbuf *msg, seq_t seq) {
@@ -306,19 +291,14 @@ public:
 
   connection_state get_state() const { return cstate; }
 
-  bool can_recv() {
-    return trx.has_buffered_mbufs_frags() ||
-           cstate != connection_state::ESTABLISHED;
-  }
+  bool can_recv() { return trx.has_buffered_mbufs_frags(); }
 
-  bool can_send() {
-    return ttx.get_current_wnd() > 0 || cstate != connection_state::ESTABLISHED;
-  }
+  bool can_send() { return (ttx.get_current_wnd() > 0); }
 
   ssize_t send_single_seg(sgl &msgl) {
-    if (!ttx.get_current_wnd())
+    if (!ttx.can_transmit())
       return -EAGAIN;
-    auto now = rte_get_timer_cycles();
+    auto now = manager->get_current_timer_cycles();
     auto pkt = std::move(msgl).take_head();
     auto send_size = pkt->data_len;
     auto ctor = [&](mbuf_ptr &pkt, seq_t seq) {
@@ -326,8 +306,7 @@ public:
       protocol::msg_frame_desc desc{
           .seq = seq,
           .ack = ack_seq,
-          .crd = 0,
-          .eom = msgl.empty(),
+          .crd = trx.prepare_return_stalled_crds(),
           .ack_frame = acb.has_unacked_pkts() && !trx.has_holes(),
           .sack = false,
       };
@@ -372,7 +351,7 @@ public:
 
   transport_statistics get_stats() {
     auto rt_stats = ttx.get_stats();
-    return {rt_stats.retransmitted, rt_stats.acked, stats.sent,
+    return {rt_stats.retransmitted, rt_stats.acked, rt_stats.sent,
             stats.retransmissions, rt_stats.rtt};
   }
 
@@ -386,12 +365,20 @@ public:
   }
 
 private:
+  swift cc;
   transport_rxpath trx;
   protocol::builder builder;
   transport_config cfg;
   transport_txpath ttx;
   slab_allocator *sb;
   ack_cb acb;
+  M *manager;
   P *pkt_if;
   connection_state cstate = connection_state::ESTABLISHING;
+
+public:
+  std::optional<concurrency::coro_handle> coro;
+  list_hook link;
+  list_hook ready;
+  list_hook ack_outstanding;
 };

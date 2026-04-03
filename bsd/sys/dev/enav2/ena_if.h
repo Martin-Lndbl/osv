@@ -1,9 +1,9 @@
 #ifndef ENA_IF_H_
 #define ENA_IF_H_
 
-#include <bypass/dev.hh>
-#include <bypass/mem.hh>
-#include <bypass/rss.hh>
+#include <minidpdk/dev.hh>
+#include <minidpdk/mem.hh>
+#include <minidpdk/rss.hh>
 #include <cstdint>
 
 class ena_eth_dev : public rte_eth_dev{

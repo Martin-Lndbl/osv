@@ -8,8 +8,8 @@
 #include <dev/enav2/ena_if.h>
 #include <sys/cdefs.h>
 #include <sys/libkern.h>
-#include <api/bypass/dev.hh>
-#include <api/bypass/rss.hh>
+#include <api/minidpdk/dev.hh>
+#include <api/minidpdk/rss.hh>
 
 #include "base/ena_plat.h"
 #include "drivers/ena.hh"

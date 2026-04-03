@@ -1,12 +1,21 @@
 #pragma once
 #include <cassert>
+#include <cstdint>
 #include <memory>
 
-#include <osv/types.h>
 #include <osv/mmu.hh>
+#include <osv/types.h>
 
-namespace sant {
+namespace minidpdk {
 class slab_allocator;
+
+using rte_mbuf_extbuf_free_callback_t = void (*)(void *addr, void *opaque);
+
+struct rte_mbuf_ext_shared_info {
+  void *fcb_opaque;
+  rte_mbuf_extbuf_free_callback_t free_cb;
+  uint16_t refcnt;
+};
 
 struct mbuf {
   // next in chain
@@ -14,6 +23,8 @@ struct mbuf {
 
   // address of the mbuf structure
   char *buf_addr;
+
+  rte_mbuf_ext_shared_info* shinfo;
 
   // memory pool allocated from
   slab_allocator *pool;
@@ -47,8 +58,7 @@ struct mbuf {
   uint16_t l2_len : 5;
   uint16_t l3_len : 6;
   uint16_t l4_len : 5;
-  uint16_t nb_segs : 12;
-  uint16_t ext : 4;
+  uint16_t nb_segs;
 
   // type of the packet
   uint32_t packet_type;
@@ -56,22 +66,21 @@ struct mbuf {
   mbuf() = default;
   mbuf(mbuf *next, slab_allocator *sb, uintptr_t iova, uint32_t size,
        uint16_t nb_segs, uint16_t data_len, uint16_t headroom)
-      : next(next), buf_addr(reinterpret_cast<char *>(this)), pool(sb),
+      : next(next), buf_addr(reinterpret_cast<char *>(this)), shinfo(nullptr), pool(sb),
         iova(iova + sizeof(mbuf) + headroom), data_offset(headroom), pkt_len(),
-        data_len(data_len), buf_len(size), refcnt(1), nb_segs(nb_segs),
-        ext() {}
+        data_len(data_len), buf_len(size), refcnt(1), nb_segs(nb_segs){}
 
   uint8_t *buf_start() {
     return reinterpret_cast<uint8_t *>(buf_addr) + sizeof(mbuf);
   }
 
-  template <typename T> T* data(size_t offset = 0) {
-    return reinterpret_cast<T*>(buf_start() + data_offset + offset);
+  template <typename T> T *data(size_t offset = 0) {
+    return reinterpret_cast<T *>(buf_start() + data_offset + offset);
   }
 
   const void *read(uint32_t off, uint32_t len, void *buf) {
     if (off + len <= data_len)
-      return data<uint8_t*>(off);
+      return data<uint8_t *>(off);
 
     auto *seg = this;
     while (seg && off >= seg->data_len) {
@@ -83,7 +92,7 @@ struct mbuf {
     while (seg && copied < len) {
       auto *src = seg->data<uint8_t>() + off;
       auto n = std::min<uint32_t>(seg->data_len - off, len - copied);
-      std::memcpy(static_cast<uint8_t*>(buf) + copied, src, n);
+      std::memcpy(static_cast<uint8_t *>(buf) + copied, src, n);
       copied += n;
       off = 0;
       seg = seg->next;
@@ -97,16 +106,6 @@ struct mbuf {
     while (seg->next)
       seg = seg->next;
     return seg;
-  }
-
-  static inline void merge(mbuf *&first, mbuf *&last, mbuf *seg) {
-    if (!first) {
-      first = seg;
-      last = seg;
-    } else {
-      last->next = seg;
-      last = seg->last_seg();
-    }
   }
 
   template <typename T> T *prepend() {
@@ -128,7 +127,6 @@ static inline void make_external(mbuf *pkt, void *buf, size_t len) {
   pkt->buf_addr = static_cast<char *>(buf);
   pkt->iova = mmu::virt_to_phys(buf);
   pkt->data_offset = 0;
-  pkt->ext = 1;
 }
 
 struct obj_header {
@@ -184,8 +182,8 @@ inline void mbuf_free(mbuf *buf);
 using mbuf_ptr = std::unique_ptr<mbuf, decltype(&mbuf_free)>;
 class slab_allocator {
 public:
-  static constexpr size_t kDefaultHeadroom = 128 + 64;
-  static constexpr size_t kMaxDataLen = 1500;
+  static constexpr size_t kDefaultHeadroom = 128;
+  static constexpr size_t kMaxDataLen = 1816;
   static constexpr size_t kDefaultSize =
       kMaxDataLen + kDefaultHeadroom + sizeof(mbuf);
   static constexpr size_t kSlabSize = 2 * 1024 * 1024;
@@ -205,8 +203,8 @@ public:
       slab::list_remove(s);
       cache.full.list_push(s);
     }
-    return new (obj) mbuf{nullptr, this, obj->iova, kDefaultSize,
-                          1, data_len, kDefaultHeadroom};
+    return new (obj) mbuf{nullptr, this,     obj->iova,       kDefaultSize,
+                          1,       data_len, kDefaultHeadroom};
   }
 
   void alloc_new_slab(slab_cache &c) {
@@ -255,9 +253,7 @@ public:
     }
   }
 
-  constexpr size_t get_data_size() const{
-      return kDefaultSize;
-  }
+  constexpr size_t get_data_size() const { return kDefaultSize; }
 
   mbuf_ptr alloc_default_safe(uint16_t data_len) {
     auto *pkt = alloc_default(data_len);
@@ -295,4 +291,4 @@ inline void mbuf_free(mbuf *buf) {
 inline mbuf_ptr mbuf_take_owner_ship(mbuf *pkt) {
   return mbuf_ptr(pkt, &mbuf_free);
 }
-} // namespace sant
+} // namespace minidpdk

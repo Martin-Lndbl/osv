@@ -15,13 +15,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <api/bypass/bit.hh>
-#include <api/bypass/defs.hh>
-#include <api/bypass/dev.hh>
-#include <api/bypass/mem.hh>
-#include <api/bypass/rss.hh>
-#include <api/bypass/time.hh>
-#include <api/bypass/util.hh>
+#include <api/minidpdk/bit.hh>
+#include <api/minidpdk/defs.hh>
+#include <api/minidpdk/dev.hh>
+#include <api/minidpdk/mem.hh>
+#include <api/minidpdk/rss.hh>
+#include <api/minidpdk/time.hh>
+#include <api/minidpdk/util.hh>
 
 #include <osv/contiguous_alloc.hh>
 #include <osv/debug.h>

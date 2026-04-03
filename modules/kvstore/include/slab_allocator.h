@@ -1,13 +1,13 @@
 #pragma once
-#include <cstdint>
-#include <osv/virt_to_phys.hh>
 #include "transport/protocol.h"
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <memory>
+#include <osv/virt_to_phys.hh>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -207,10 +207,9 @@ public:
     return alloc<1, kDefaultJumboSize, kJumboHeadroom, true>(kMaxJumboDataLen);
   }
 
-  static uintptr_t virt_to_phys(void *vaddr) { 
-      return mmu::virt_to_phys(vaddr);
+  static uintptr_t virt_to_phys(void *vaddr) {
+    return mmu::virt_to_phys(vaddr);
   }
-  
 
   template <bool iova = false> void alloc_new_slab(slab_cache &c) {
     auto *region =
@@ -218,12 +217,10 @@ public:
              MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0);
     assert(region != MAP_FAILED);
     auto *s = static_cast<slab *>(region);
-    if constexpr (iova) {
-      //prefault, MAP_POPULATE may fail   
-      *reinterpret_cast<volatile uint64_t *>(region) = 0;
-      s->iova = virt_to_phys(region);
-      assert(s->iova != RTE_BAD_IOVA);
-    }
+    // prefault, MAP_POPULATE may fail
+    *reinterpret_cast<volatile uint64_t *>(region) = 0;
+    s->iova = virt_to_phys(region);
+    assert(s->iova != RTE_BAD_IOVA);
 
     auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab);
     s->freelist = new (base) obj_header;
@@ -277,9 +274,9 @@ public:
     return mbuf_ptr(pkt, mbuf_free);
   }
 
-  mbuf_ptr alloc_large_safe(){
-      auto *jumbo_pkt = alloc_large();
-      return mbuf_ptr(jumbo_pkt, mbuf_free);
+  mbuf_ptr alloc_large_safe() {
+    auto *jumbo_pkt = alloc_large();
+    return mbuf_ptr(jumbo_pkt, mbuf_free);
   }
 
   ~slab_allocator() {

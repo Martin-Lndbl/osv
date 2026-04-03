@@ -28,6 +28,8 @@ int rte_pktmbuf_alloc_bulk(rte_mempool* pool, rte_mbuf** pkts, uint16_t size){
     for(auto i = 0u; i < size; ++i)
         // adjust add region manually
         pkts[i] = pool->alloc_default(0);
+    if(pool->init_fn)
+        pool->init_fn(pkts, size, pool->priv);
     return 0;
 }
 

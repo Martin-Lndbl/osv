@@ -24,7 +24,7 @@ struct mbuf {
   // address of the mbuf structure
   char *buf_addr;
 
-  rte_mbuf_ext_shared_info* shinfo;
+  rte_mbuf_ext_shared_info *shinfo;
 
   // memory pool allocated from
   slab_allocator *pool;
@@ -66,9 +66,10 @@ struct mbuf {
   mbuf() = default;
   mbuf(mbuf *next, slab_allocator *sb, uintptr_t iova, uint32_t size,
        uint16_t nb_segs, uint16_t data_len, uint16_t headroom)
-      : next(next), buf_addr(reinterpret_cast<char *>(this)), shinfo(nullptr), pool(sb),
-        iova(iova + sizeof(mbuf) + headroom), data_offset(headroom), pkt_len(),
-        data_len(data_len), buf_len(size), refcnt(1), nb_segs(nb_segs){}
+      : next(next), buf_addr(reinterpret_cast<char *>(this)), shinfo(nullptr),
+        pool(sb), iova(iova + sizeof(mbuf) + headroom), data_offset(headroom),
+        pkt_len(), data_len(data_len), buf_len(size), refcnt(1),
+        nb_segs(nb_segs) {}
 
   uint8_t *buf_start() {
     return reinterpret_cast<uint8_t *>(buf_addr) + sizeof(mbuf);
@@ -180,6 +181,7 @@ struct slab_cache {
 inline void mbuf_free(mbuf *buf);
 
 using mbuf_ptr = std::unique_ptr<mbuf, decltype(&mbuf_free)>;
+using init_fn_t = void (*)(mbuf **, uint16_t, void *);
 class slab_allocator {
 public:
   static constexpr size_t kDefaultHeadroom = 128;
@@ -189,7 +191,11 @@ public:
   static constexpr size_t kSlabSize = 2 * 1024 * 1024;
 
 public:
-  slab_allocator() : cache(kDefaultSize) { alloc_new_slab(cache); }
+  slab_allocator(size_t obj_size = kDefaultSize, init_fn_t init_fn = nullptr,
+                 void *priv = nullptr)
+      : cache(obj_size), init_fn(init_fn), priv(priv) {
+    alloc_new_slab(cache);
+  }
 
   mbuf *alloc_default(uint16_t data_len) {
     assert(data_len <= kMaxDataLen);
@@ -275,6 +281,10 @@ public:
 
 private:
   slab_cache cache;
+
+public:
+  init_fn_t init_fn;
+  void *priv;
 };
 
 inline mbuf *alloc_mbuf(slab_allocator *sb, size_t size) {

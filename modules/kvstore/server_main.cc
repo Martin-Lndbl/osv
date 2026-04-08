@@ -14,6 +14,7 @@
 #include <cstring>
 #include <getopt.h>
 #include <memory>
+#include <minidpdk/dev.hh>
 #include <minidpdk/lcore.hh>
 #include <minidpdk/net.hh>
 #include <minidpdk/time.hh>
@@ -85,6 +86,8 @@ static void handler(int sig) {
 }
 
 int lcore_server_fun(void *arg) {
+    
+  __rte_setup_memory(0);
   auto myid = rte_lcore_index(rte_lcore_id());
   auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
   auto *server = adapters[myid].iface.get();

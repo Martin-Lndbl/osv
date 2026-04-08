@@ -2428,7 +2428,7 @@ int ena_attach(pci::device *dev, ena_adapter **_adapter) {
 
   /* Assign default devargs values */
   adapter->missing_tx_completion_to = ENA_TX_TIMEOUT;
-  adapter->llq_header_policy = ENA_LLQ_POLICY_RECOMMENDED;
+  adapter->llq_header_policy = ENA_LLQ_POLICY_DISABLED;
 
   rc = ena_com_allocate_customer_metrics_buffer(ena_dev);
   if (rc != 0) {
@@ -2533,10 +2533,8 @@ int ena_attach(pci::device *dev, ena_adapter **_adapter) {
 
   adapters_found++;
   adapter->state = ENA_ADAPTER_STATE_INIT;
-
   adapter->edev->tx_burst = tx_burst;
   adapter->edev->rx_burst = rx_burst;
-
   return 0;
 
 err_rss_destroy:

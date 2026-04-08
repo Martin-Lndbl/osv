@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <cassert>
 #include <cstring>
@@ -138,7 +139,7 @@ struct obj_header {
 
 inline void mbuf_free(mbuf *buf);
 
-alignas(64) struct slab {
+struct alignas(64) slab {
   slab *next;
   slab *prev;
   obj_header *freelist;
@@ -154,11 +155,13 @@ alignas(64) struct slab {
   slab() : next(nullptr), prev(nullptr), freelist(nullptr), inuse() {}
 };
 
+static_assert(sizeof(slab) % 64 == 0, "");
+
 inline void mbuf_free(mbuf *buf);
 
 using init_fn_t = void (*)(mbuf **, uint16_t, void *);
 struct slab_cache {
-  static constexpr size_t kDefaultCacheSize = 256;
+  static constexpr size_t kDefaultCacheSize = 128;
   struct slab_list {
     slab head, tail;
     slab_list() : head(), tail() {
@@ -251,9 +254,9 @@ public:
     auto *s = static_cast<slab *>(region);
     auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab);
     s->iova = mmu::virt_to_phys(s);
-    s->freelist = new (base) obj_header;
-    size_t space = kSlabSize - sizeof(slab);
-    size_t off = 0;
+    size_t off = color;
+    s->freelist = new (base + off) obj_header;
+    size_t space = kSlabSize - sizeof(slab) - off;
     while (off + 2 * c.obj_size <= space) {
       auto *obj = reinterpret_cast<obj_header *>(base + off);
       obj->next = new (base + off + c.obj_size) obj_header;
@@ -264,6 +267,7 @@ public:
     obj->next = nullptr;
     obj->iova = s->iova + sizeof(slab) + off;
     c.partial.list_push(s);
+    color = (color + 64) & 127;
     assert(!cache.partial.empty());
   }
 
@@ -320,6 +324,7 @@ public:
 
 private:
   slab_cache cache;
+  unsigned color = 0;
 public:
   void* priv;
   init_fn_t init_fn;

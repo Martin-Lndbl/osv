@@ -267,7 +267,7 @@ public:
     obj->next = nullptr;
     obj->iova = s->iova + sizeof(slab) + off;
     c.partial.list_push(s);
-    color = (color + 64) & 127;
+    color = (color + 64) & 1023;
     assert(off + sizeof(slab) <= kSlabSize);
     assert(!cache.partial.empty());
   }

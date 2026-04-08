@@ -155,6 +155,8 @@ struct rte_eth_dev_data {
 };
 
 struct rte_eth_dev {
+  using tx_burst_t = uint16_t (*) (rte_eth_dev*, uint16_t, rte_mbuf**, uint16_t);  
+  using rx_burst_t = uint16_t (*) (rte_eth_dev*, uint16_t, rte_mbuf**, uint16_t);
   rte_eth_dev_data data;
   template <typename T> T *get() { return static_cast<T *>(data.get<T>()); }
   rte_eth_dev(void *dev_data) : data(dev_data) {}
@@ -170,10 +172,8 @@ struct rte_eth_dev {
                              unsigned int socket_id,
                              const struct rte_eth_rxconf *rx_conf,
                              rte_mempool *mp) = 0;
-  virtual uint16_t tx_burst(uint16_t qid, rte_mbuf **pkts,
-                            uint16_t nb_pkts) = 0;
-  virtual uint16_t rx_burst(uint16_t qid, rte_mbuf **pkts,
-                            uint16_t nb_pkts) = 0;
+  tx_burst_t tx_burst;
+  rx_burst_t rx_burst;
   virtual int drv_configure() = 0;
   virtual void get_stats(rte_eth_stats *stats) = 0;
   int dev_configure(uint16_t nb_tx, uint16_t nb_rx, rte_eth_conf *conf);
@@ -188,14 +188,14 @@ __inline uint16_t rte_eth_tx_burst(uint16_t port, uint16_t qid,
                                        rte_mbuf **pkts, uint16_t cnt) {
   auto *eth_dev = eth_os::get_eth_for_port(port);
   assert(eth_dev);
-  return eth_dev->tx_burst(qid, pkts, cnt);
+  return eth_dev->tx_burst(eth_dev, qid, pkts, cnt);
 }
 
 __inline uint16_t rte_eth_rx_burst(uint16_t port, uint16_t qid,
                                        rte_mbuf **pkts, uint16_t cnt) {
   auto *eth_dev = eth_os::get_eth_for_port(port);
   assert(eth_dev);
-  return eth_dev->rx_burst(qid, pkts, cnt);
+  return eth_dev->rx_burst(eth_dev, qid, pkts, cnt);
 }
 
 __inline int rte_eth_dev_is_valid_port(uint16_t port) {

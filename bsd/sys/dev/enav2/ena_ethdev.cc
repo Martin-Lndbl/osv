@@ -262,6 +262,11 @@ static uint64_t ena_get_tx_port_offloads(struct ena_adapter *adapter);
 static uint64_t ena_get_rx_queue_offloads(struct ena_adapter *adapter);
 static uint64_t ena_get_tx_queue_offloads(struct ena_adapter *adapter);
 
+uint16_t rx_burst(rte_eth_dev* dev, uint16_t qid, rte_mbuf **rx_pkts,
+                               uint16_t nb_pkts);
+uint16_t tx_burst(rte_eth_dev* dev, uint16_t qid, rte_mbuf **tx_pkts,
+                               uint16_t nb_pkts);
+
 static int ena_infos_get(struct rte_eth_dev *dev,
                          struct rte_eth_dev_info *dev_info);
 
@@ -1631,7 +1636,7 @@ static rte_mbuf *ena_rx_mbuf(struct ena_ring *rx_ring,
      *  2. Descriptor len was 0 and we failed to add the descriptor
      *     to the device. In that situation, we should try to add
      *     the mbuf again in the populate routine and mark the
-     *     descriptor as used up by the device.
+     *     descriptor as urx_free_threshsed up by the device.
      */
     rx_info->mbuf = NULL;
     rx_ring->empty_rx_reqs[ntc] = req_id;
@@ -2148,12 +2153,12 @@ int ena_eth_dev::rx_queue_setup(uint16_t qid, uint16_t nb_desc,
 TRACEPOINT(trace_ena_eth_dev_tx_burst, "qid=%x, tx_pkts=%y, nb_pkts=%z",
            uint16_t, rte_mbuf **, uint16_t);
 TRACEPOINT(trace_ena_eth_dev_tx_burst_ret, "");
-uint16_t ena_eth_dev::tx_burst(uint16_t qid, rte_mbuf **tx_pkts,
+uint16_t tx_burst(rte_eth_dev* dev, uint16_t qid, rte_mbuf **tx_pkts,
                                uint16_t nb_pkts) {
   trace_ena_eth_dev_tx_burst(qid, tx_pkts, nb_pkts);
-  if (qid >= data.nb_tx_queues)
+  if (qid >= dev->data.nb_tx_queues)
     return 0;
-  ena_ring *tx_ring = static_cast<ena_ring *>(data.tx_queues[qid]);
+  ena_ring *tx_ring = static_cast<ena_ring *>(dev->data.tx_queues[qid]);
   int available_desc;
   uint16_t sent_idx = 0;
 
@@ -2194,12 +2199,12 @@ uint16_t ena_eth_dev::tx_burst(uint16_t qid, rte_mbuf **tx_pkts,
 TRACEPOINT(trace_ena_eth_dev_rx_burst, "qid=%x, rx_pkts=%y, nb_pkts=%z",
            uint16_t, rte_mbuf **, uint16_t);
 TRACEPOINT(trace_ena_eth_dev_rx_burst_ret, "");
-uint16_t ena_eth_dev::rx_burst(uint16_t qid, rte_mbuf **rx_pkts,
+uint16_t rx_burst(rte_eth_dev* dev, uint16_t qid, rte_mbuf **rx_pkts,
                                uint16_t nb_pkts) {
   trace_ena_eth_dev_rx_burst(qid, rx_pkts, nb_pkts);
-  if (qid >= data.nb_rx_queues)
+  if (qid >= dev->data.nb_rx_queues)
     return 0;
-  ena_ring *rx_ring = static_cast<ena_ring *>(data.rx_queues[qid]);
+  ena_ring *rx_ring = static_cast<ena_ring *>(dev->data.rx_queues[qid]);
   unsigned int free_queue_entries;
   uint16_t next_to_clean = rx_ring->next_to_clean;
   enum ena_regs_reset_reason_types reset_reason;
@@ -2413,7 +2418,7 @@ int ena_attach(pci::device *dev, ena_adapter **_adapter) {
   adapter->regs->map();
   ena_dev->reg_bar =
       static_cast<u8 *>(const_cast<void *>(adapter->regs->get_mmio()));
-  /* Pass device data as a pointer which can be passed to the IO functions
+  /* Pass device data as rx_free_thresha pointer which can be passed to the IO functions
    * by the ena_com (for example - the memory allocation).
    */
   ena_dev->dmadev = &edev->data;
@@ -2528,6 +2533,9 @@ int ena_attach(pci::device *dev, ena_adapter **_adapter) {
 
   adapters_found++;
   adapter->state = ENA_ADAPTER_STATE_INIT;
+
+  adapter->edev->tx_burst = tx_burst;
+  adapter->edev->rx_burst = rx_burst;
 
   return 0;
 

@@ -20,8 +20,6 @@ public:
 			      uint16_t nb_desc, unsigned int socket_id,
 			      const struct rte_eth_rxconf *rx_conf,
             rte_mempool *mp) override;
-    uint16_t tx_burst(uint16_t qid, rte_mbuf** pkts, uint16_t nb_pkts) override;
-    uint16_t rx_burst(uint16_t qid, rte_mbuf** pkts, uint16_t nb_pkts) override;
     void get_stats(rte_eth_stats *stats) override;
     int drv_configure() override;
     int get_dev_info(rte_eth_dev_info *info) override; 

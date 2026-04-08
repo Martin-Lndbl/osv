@@ -25,9 +25,9 @@ void rte_mbuf_raw_free(rte_mbuf* mbuf){
 
 
 int rte_pktmbuf_alloc_bulk(rte_mempool* pool, rte_mbuf** pkts, uint16_t size){
-    for(auto i = 0u; i < size; ++i)
-        // adjust add region manually
-        pkts[i] = pool->alloc_default(0);
+    int ret = pool->alloc_bulk(pkts, size);
+    if(ret < 0)
+        return ret;
     if(pool->init_fn)
         pool->init_fn(pkts, size, pool->priv);
     return 0;
@@ -53,7 +53,7 @@ rte_mempool *rte_pktmbuf_pool_create(const char *name, unsigned n,
     (void)socket_id;
     (void)data_room_size;
     auto *slab = malloc(sizeof(minidpdk::slab_allocator));
-    return new(slab) minidpdk::slab_allocator();
+    return new(slab) minidpdk::slab_allocator(n);
 }
 void rte_mempool_free(rte_mempool *pool){
     pool->~slab_allocator();

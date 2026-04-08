@@ -36,8 +36,8 @@ public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
                      uint32_t sip, std::shared_ptr<dpdk_allocator> allocator,
-                     P *parent, std::unique_ptr<slab_allocator>& sb, uint16_t cores)
-      : dev(port, txq, rxq), sb(std::move(sb)), pkt_if(&dev, allocator, sb.get(), sip, port), active(),
+                     P *parent, std::unique_ptr<slab_allocator>& sb_ptr, uint16_t cores)
+      : dev(port, txq, rxq), sb(std::move(sb_ptr)), pkt_if(&dev, allocator, sb.get(), sip, port), active(),
         cores(cores), is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;

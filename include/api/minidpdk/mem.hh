@@ -62,7 +62,7 @@
 /* add new RX flags here, don't forget to update RTE_MBUF_F_FIRST_FREE */
 
 #define RTE_MBUF_F_FIRST_FREE (1ULL << 23)
-#define RTE_MBUF_F_LAST_FREE (1ULL << 40) #
+#define RTE_MBUF_F_LAST_FREE (1ULL << 40) 
 
 /* add new TX flags here, don't forget to update RTE_MBUF_F_LAST_FREE  */
 
@@ -162,7 +162,7 @@ void rte_mbuf_raw_free(rte_mbuf *mbuf);
 int rte_pktmbuf_alloc_bulk(rte_mempool* pool, rte_mbuf **pkts, uint16_t size);
 void rte_pktmbuf_free_bulk(rte_mbuf **pkts, uint16_t size);
 __inline rte_mbuf* rte_pktmbuf_alloc(rte_mempool* pool){
-    return pool->alloc_default(0);
+    return pool->alloc_single();
 }
 const void *rte_pktmbuf_read(rte_mbuf *, uint32_t, uint32_t, uint8_t *);
 rte_mempool *rte_pktmbuf_pool_create(const char *name, unsigned n,

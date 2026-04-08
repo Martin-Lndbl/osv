@@ -1,6 +1,7 @@
 #pragma once
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 
 #include <osv/mmu.hh>
@@ -123,13 +124,6 @@ struct mbuf {
   }
 };
 
-static inline void make_external(mbuf *pkt, void *buf, size_t len) {
-  pkt->data_len = len;
-  pkt->buf_addr = static_cast<char *>(buf);
-  pkt->iova = mmu::virt_to_phys(buf);
-  pkt->data_offset = 0;
-}
-
 struct obj_header {
   obj_header *next;
   uintptr_t iova;
@@ -241,7 +235,7 @@ public:
     bool was_full = !slb->freelist;
     auto *hdr = reinterpret_cast<obj_header *>(obj);
     hdr->next = slb->freelist;
-    hdr->iova = obj->iova - obj->data_offset - sizeof(mbuf);
+    hdr->iova = slb->iova + (iptr - reinterpret_cast<intptr_t>(slb));
     slb->freelist = hdr;
     --slb->inuse;
     if (was_full) {

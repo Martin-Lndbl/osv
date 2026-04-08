@@ -198,7 +198,7 @@ public:
   mbuf *alloc_default(uint16_t data_len) {
     assert(data_len <= kMaxDataLen);
     obj_header *obj;
-    if (likely(cache.mag_top > 0)) {
+    if (cache.mag_top > 0) {
       obj = cache.mag[--cache.mag_top];
     } else {
       if (cache.partial.empty())
@@ -239,7 +239,7 @@ public:
     assert(!cache.partial.empty());
   }
 
-  void alloc_bulk(rte_mbuf **bufs, unsigned n) {
+  void alloc_bulk(mbuf **bufs, unsigned n) {
     auto from_mag = std::min<unsigned>(n, cache.mag_top);
     if (from_mag) {
       std::memcpy(bufs, &cache.mag[cache.mag_top - from_mag],
@@ -255,7 +255,7 @@ public:
     auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
     auto *hdr = reinterpret_cast<obj_header *>(obj);
     hdr->iova = slb->iova + (iptr - reinterpret_cast<intptr_t>(slb));
-    if (likely(cache.mag_top < slab_cache::kMagSize)) {
+    if (cache.mag_top < slab_cache::kMagSize) {
       cache.mag[cache.mag_top++] = hdr;
       return;
     }

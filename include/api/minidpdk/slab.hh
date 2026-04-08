@@ -147,6 +147,7 @@ struct slab {
 
 struct slab_cache {
   static constexpr size_t kDefaultCacheSize = 128;
+  static constexpr size_t kMagSize = 256;
   struct slab_list {
     slab head, tail;
     slab_list() : head(), tail() {
@@ -167,9 +168,12 @@ struct slab_cache {
   };
   slab_list partial;
   slab_list full;
+  obj_header *mag[kMagSize];
+  size_t mag_top;
   size_t obj_size;
 
-  slab_cache(size_t obj_size) : partial(), full(), obj_size(obj_size) {}
+  slab_cache(size_t obj_size)
+      : partial(), full(), mag_top(0), obj_size(obj_size) {}
 };
 
 inline void mbuf_free(mbuf *buf);
@@ -193,17 +197,23 @@ public:
 
   mbuf *alloc_default(uint16_t data_len) {
     assert(data_len <= kMaxDataLen);
-    if (cache.partial.empty())
-      alloc_new_slab(cache);
-    auto *s = cache.partial.front();
-    auto *obj = s->freelist;
-    s->freelist = obj->next;
-    ++s->inuse;
-    if (!s->freelist) {
-      slab::list_remove(s);
-      cache.full.list_push(s);
+    obj_header *obj;
+    if (__builtin_expect(cache.mag_top > 0, 1)) {
+      obj = cache.mag[--cache.mag_top];
+    } else {
+      if (cache.partial.empty())
+        alloc_new_slab(cache);
+      auto *s = cache.partial.front();
+      obj = s->freelist;
+      s->freelist = obj->next;
+      ++s->inuse;
+      if (!s->freelist) {
+        slab::list_remove(s);
+        cache.full.list_push(s);
+      }
     }
-    return new (obj) mbuf{nullptr, this,     obj->iova,       kDefaultSize,
+    auto iova = obj->iova;
+    return new (obj) mbuf{nullptr, this,     iova,            kDefaultSize,
                           1,       data_len, kDefaultHeadroom};
   }
 
@@ -232,10 +242,14 @@ public:
   void free_single_mbuf(mbuf *obj) {
     auto iptr = reinterpret_cast<intptr_t>(obj);
     auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
-    bool was_full = !slb->freelist;
     auto *hdr = reinterpret_cast<obj_header *>(obj);
-    hdr->next = slb->freelist;
     hdr->iova = slb->iova + (iptr - reinterpret_cast<intptr_t>(slb));
+    if (__builtin_expect(cache.mag_top < slab_cache::kMagSize, 1)) {
+      cache.mag[cache.mag_top++] = hdr;
+      return;
+    }
+    bool was_full = !slb->freelist;
+    hdr->next = slb->freelist;
     slb->freelist = hdr;
     --slb->inuse;
     if (was_full) {

@@ -1,3 +1,4 @@
+#include <bit>
 #include <minidpdk/mem.hh>
 #include <minidpdk/slab.hh>
 #include <cassert>
@@ -25,7 +26,7 @@ void rte_mbuf_raw_free(rte_mbuf* mbuf){
 
 
 int rte_pktmbuf_alloc_bulk(rte_mempool* pool, rte_mbuf** pkts, uint16_t size){
-    int ret = pool->alloc_bulk(pkts, size);
+    int ret = pool->alloc_bulk(reinterpret_cast<void**>(pkts), size);
     if(ret < 0)
         return ret;
     if(pool->init_fn)

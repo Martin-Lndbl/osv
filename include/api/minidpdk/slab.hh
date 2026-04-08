@@ -1,9 +1,13 @@
+
+
 #pragma once
-#include <cassert>
+
 #include <cstdint>
+#include <cassert>
 #include <cstring>
 #include <memory>
 
+#include <minidpdk/util.hh>
 #include <osv/mmu.hh>
 #include <osv/types.h>
 
@@ -25,21 +29,13 @@ struct mbuf {
   // address of the mbuf structure
   char *buf_addr;
 
-  rte_mbuf_ext_shared_info *shinfo;
 
   // memory pool allocated from
   slab_allocator *pool;
 
-  // NIC offload flags
-  uint64_t ol_flags;
-
   // IO Virtual Address
   uintptr_t iova;
 
-  // rss hash
-  struct {
-    uint64_t rss;
-  } hash;
 
   // offset of the dataroom
   uint16_t data_offset;
@@ -61,16 +57,27 @@ struct mbuf {
   uint16_t l4_len : 5;
   uint16_t nb_segs;
 
+  // rss hash
+  struct {
+    uint64_t rss;
+  } hash;
+
+  // NIC offload flags
+  uint64_t ol_flags;
+
+
+  rte_mbuf_ext_shared_info *shinfo;
+
   // type of the packet
   uint32_t packet_type;
 
   mbuf() = default;
   mbuf(mbuf *next, slab_allocator *sb, uintptr_t iova, uint32_t size,
        uint16_t nb_segs, uint16_t data_len, uint16_t headroom)
-      : next(next), buf_addr(reinterpret_cast<char *>(this)), shinfo(nullptr),
+      : next(next), buf_addr(reinterpret_cast<char *>(this)),
         pool(sb), iova(iova + sizeof(mbuf) + headroom), data_offset(headroom),
         pkt_len(), data_len(data_len), buf_len(size), refcnt(1),
-        nb_segs(nb_segs) {}
+        nb_segs(nb_segs), shinfo(nullptr) {}
 
   uint8_t *buf_start() {
     return reinterpret_cast<uint8_t *>(buf_addr) + sizeof(mbuf);
@@ -129,7 +136,9 @@ struct obj_header {
   uintptr_t iova;
 };
 
-struct slab {
+inline void mbuf_free(mbuf *buf);
+
+alignas(64) struct slab {
   slab *next;
   slab *prev;
   obj_header *freelist;
@@ -145,8 +154,11 @@ struct slab {
   slab() : next(nullptr), prev(nullptr), freelist(nullptr), inuse() {}
 };
 
+inline void mbuf_free(mbuf *buf);
+
+using init_fn_t = void (*)(mbuf **, uint16_t, void *);
 struct slab_cache {
-  static constexpr size_t kDefaultCacheSize = 128;
+  static constexpr size_t kDefaultCacheSize = 256;
   struct slab_list {
     slab head, tail;
     slab_list() : head(), tail() {
@@ -165,103 +177,72 @@ struct slab_cache {
 
     slab *front() { return head.next; }
   };
+
   slab_list partial;
   slab_list full;
+  std::array<obj_header *, kDefaultCacheSize> mag;
+  unsigned top = 0;
   size_t obj_size;
 
-  slab_cache(size_t obj_size)
-      : partial(), full(), obj_size(obj_size) {}
+  slab_cache(size_t obj_size) : partial(), full(), obj_size(obj_size) {}
 };
 
 inline void mbuf_free(mbuf *buf);
 
-using init_fn_t = void (*)(mbuf **, uint16_t, void *);
+using mbuf_ptr = std::unique_ptr<mbuf, decltype(&mbuf_free)>;
 class slab_allocator {
 public:
   static constexpr size_t kDefaultHeadroom = 128;
-  static constexpr size_t kMaxDataLen = 1816;
+  static constexpr size_t kMaxDataLen = 1500 + 20;
   static constexpr size_t kDefaultSize =
       kMaxDataLen + kDefaultHeadroom + sizeof(mbuf);
+  static_assert(kDefaultSize % 64 == 0, "");
   static constexpr size_t kSlabSize = 2 * 1024 * 1024;
 
 public:
-  slab_allocator(unsigned size, size_t obj_size = kDefaultSize,
-                 init_fn_t init_fn = nullptr, void *priv = nullptr)
-      : cache(obj_size), elems(size), init_fn(init_fn), priv(priv) {
-    for (auto &obj : elems)
-      obj = alloc_default(0);
-    top = size;
-  }
+  slab_allocator(unsigned size, void* priv = nullptr, init_fn_t init_fn = nullptr) : cache(kDefaultSize), priv(priv), init_fn(init_fn) { alloc_new_slab(cache); }
 
-  int alloc_bulk(mbuf **bufs, unsigned n) {
-    if (top < n)
-      return -ENOENT;
-    for (unsigned i = 0; i < n; ++i) {
-      auto *obj = elems[--top];
-      auto iova = obj->iova;
-      bufs[i] = new (obj)
-          mbuf{nullptr, this, iova, kDefaultSize, 1, 0, kDefaultHeadroom};
-    }
-    return 0;
-  }
-
-  mbuf *alloc_single() {
-    if (!top)
-      return nullptr;
-    auto *obj = elems[--top];
-    auto iova = obj->iova;
-    return new (obj)
-          mbuf{nullptr, this, iova, kDefaultSize, 1, 0, kDefaultHeadroom};
-  }
-
-  void free_single_mbuf(mbuf *obj) {
-    auto iptr = reinterpret_cast<intptr_t>(obj);
-    auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
-    auto *hdr = reinterpret_cast<obj_header *>(obj);
-    hdr->iova = slb->iova + (iptr - reinterpret_cast<intptr_t>(slb));
-    assert(top < elems.size());
-    elems[top++] = hdr;
-  }
-
-  void free_mbuf(mbuf *obj) {
-    auto *obj_ptr = obj;
-    while (obj_ptr) {
-      auto *next = obj_ptr->next;
-      free_single_mbuf(obj_ptr);
-      obj_ptr = next;
-    }
-  }
-
-  constexpr size_t get_data_size() const { return kDefaultSize; }
-
-  ~slab_allocator() {
-    auto free_slabs = [](slab_cache::slab_list &list) {
-      auto *s = list.head.next;
-      while (s != &list.tail) {
-        auto *next = s->next;
-        memory::free_huge_page(s, mmu::huge_page_size);
-        s = next;
-      }
-    };
-    free_slabs(cache.partial);
-    free_slabs(cache.full);
-  }
-
-private:
-  obj_header *alloc_default(uint16_t data_len) {
+  mbuf *alloc_default(uint16_t data_len) {
     assert(data_len <= kMaxDataLen);
-    obj_header *obj;
-    if (cache.partial.empty())
+    obj_header *obj = nullptr;
+    if (cache.top) {
+      obj = cache.mag[--cache.top];
+    } else {
+      if (cache.partial.empty())
         alloc_new_slab(cache);
-    auto *s = cache.partial.front();
-    obj = s->freelist;
-    s->freelist = obj->next;
-    ++s->inuse;
-    if (!s->freelist) {
-      slab::list_remove(s);
-      cache.full.list_push(s);
+      auto *s = cache.partial.front();
+      obj = s->freelist;
+      s->freelist = obj->next;
+      ++s->inuse;
+      if (!s->freelist) {
+        slab::list_remove(s);
+        cache.full.list_push(s);
+      }
     }
-    return obj;
+    assert(obj);
+    return new (obj) mbuf{nullptr, this,     obj->iova,       kDefaultSize,
+                          1,       data_len, kDefaultHeadroom};
+  }
+
+  int alloc_bulk(void** pkts, unsigned n){
+      auto from_cache = std::min<unsigned>(cache.top, n);
+      if(from_cache){
+          cache.top -= from_cache;
+          std::memcpy(pkts, cache.mag.data() + cache.top, from_cache * sizeof(void*));
+          for(auto i = 0u; i < from_cache; ++i){
+              auto *obj = reinterpret_cast<obj_header*>(pkts[i]);
+              rte_prefetch0_write(pkts + 3);
+              new (obj) mbuf{nullptr, this,     obj->iova,       kDefaultSize,
+                          1,       0, kDefaultHeadroom};
+          }
+      }
+      for(auto i = from_cache; i < n; ++i)
+          pkts[i] = alloc_default(0);
+      return 0;
+  }
+
+  mbuf* alloc_single(){
+      return alloc_default(0);
   }
 
   void alloc_new_slab(slab_cache &c) {
@@ -285,26 +266,79 @@ private:
     c.partial.list_push(s);
     assert(!cache.partial.empty());
   }
-  slab_cache cache;
-  std::vector<obj_header *> elems;
-  unsigned top = 0;
 
+  __inline void free_single_mbuf(mbuf *obj) {
+    auto iptr = reinterpret_cast<intptr_t>(obj);
+    auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
+    bool was_full = !slb->freelist;
+    auto *hdr = reinterpret_cast<obj_header *>(obj);
+    hdr->iova = slb->iova + (reinterpret_cast<uintptr_t>(obj) -
+                             reinterpret_cast<uintptr_t>(slb));
+    if (cache.top < slab_cache::kDefaultCacheSize) {
+      hdr->next = nullptr;
+      cache.mag[cache.top++] = hdr;
+    } else {
+      hdr->next = slb->freelist;
+      slb->freelist = hdr;
+      --slb->inuse;
+      if (was_full) {
+        slab::list_remove(slb);
+        cache.partial.list_push(slb);
+      }
+    }
+  }
+
+  void free_mbuf(mbuf *obj) {
+    assert(obj->refcnt == 0);
+    auto *obj_ptr = obj;
+    while (obj_ptr) {
+      auto *next = obj_ptr->next;
+      free_single_mbuf(obj_ptr);
+      obj_ptr = next;
+    }
+  }
+
+  constexpr size_t get_data_size() const { return kDefaultSize; }
+
+  mbuf_ptr alloc_default_safe(uint16_t data_len) {
+    auto *pkt = alloc_default(data_len);
+    return mbuf_ptr(pkt, mbuf_free);
+  }
+
+  ~slab_allocator() {
+    auto free_slabs = [](slab_cache::slab_list &list) {
+      auto *s = list.head.next;
+      while (s != &list.tail) {
+        auto *next = s->next;
+        memory::free_huge_page(s, mmu::huge_page_size);
+        s = next;
+      }
+    };
+    free_slabs(cache.partial);
+    free_slabs(cache.full);
+  }
+
+private:
+  slab_cache cache;
 public:
+  void* priv;
   init_fn_t init_fn;
-  void *priv;
 };
 
 inline mbuf *alloc_mbuf(slab_allocator *sb, size_t size) {
-  auto *mb = sb->alloc_single();
-  mb->data_len = mb->pkt_len = size;
-  return mb;
+  return sb->alloc_default(size);
 }
 
 inline void mbuf_free(mbuf *buf) {
   assert(buf->pool);
   assert(buf->refcnt >= 1);
   --buf->refcnt;
+  if (buf->refcnt)
+    return;
   buf->pool->free_mbuf(buf);
 }
 
+inline mbuf_ptr mbuf_take_owner_ship(mbuf *pkt) {
+  return mbuf_ptr(pkt, &mbuf_free);
+}
 } // namespace minidpdk

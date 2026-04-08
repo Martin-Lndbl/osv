@@ -251,12 +251,12 @@ public:
   void alloc_new_slab(slab_cache &c) {
     auto *region = memory::alloc_huge_page(mmu::huge_page_size);
     assert(region != nullptr);
-    auto *s = static_cast<slab *>(region);
+    auto *s = new(region) slab();
     auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab);
     s->iova = mmu::virt_to_phys(s);
     size_t off = color;
     s->freelist = new (base + off) obj_header;
-    size_t space = kSlabSize - sizeof(slab) - off;
+    size_t space = kSlabSize - sizeof(slab);
     while (off + 2 * c.obj_size <= space) {
       auto *obj = reinterpret_cast<obj_header *>(base + off);
       obj->next = new (base + off + c.obj_size) obj_header;
@@ -268,6 +268,7 @@ public:
     obj->iova = s->iova + sizeof(slab) + off;
     c.partial.list_push(s);
     color = (color + 64) & 127;
+    assert(off + sizeof(slab) <= kSlabSize);
     assert(!cache.partial.empty());
   }
 

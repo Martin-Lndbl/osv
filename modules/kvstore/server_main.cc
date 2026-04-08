@@ -1,9 +1,10 @@
+#include "bench.h"
 #include "connection.h"
 #include "dpdk/allocator.h"
 #include "iface.h"
-#include "sgl.h"
 #include "kv_protocol.h"
 #include "server.h"
+#include "sgl.h"
 #include "slab_allocator.h"
 #include "task/async.h"
 #include "task/task.h"
@@ -13,12 +14,11 @@
 #include <cstring>
 #include <getopt.h>
 #include <memory>
+#include <minidpdk/lcore.hh>
+#include <minidpdk/net.hh>
+#include <minidpdk/time.hh>
 #include <signal.h>
 #include <utility>
-#include <minidpdk/time.hh>
-#include <minidpdk/net.hh>
-#include <minidpdk/lcore.hh>
-#include "bench.h"
 
 struct netconfig {
   uint32_t sip;
@@ -95,9 +95,9 @@ int lcore_server_fun(void *arg) {
         while (true) {
           sgl rsgl{};
           auto sz = co_await recv(iface.get_scheduler(), con, rsgl);
-          if (sz == 0) 
+          if (sz == 0)
             co_return;
-          
+
           assert(ssgl.empty());
           for (auto &seg : rsgl) {
             assert(seg.data_len == sizeof(kv::kv_packet<kv::kv_request>));
@@ -142,7 +142,8 @@ int run(netconfig &conf) {
     lcore_ids.push_back(lcore_id);
     ++i;
   }
-  auto ifc = iface::configure_port(0, nthreads, nthreads, allocators, lcore_ids);
+  auto ifc =
+      iface::configure_port(0, nthreads, nthreads, allocators, lcore_ids);
   if (!ifc)
     return -1;
 
@@ -164,6 +165,7 @@ int run(netconfig &conf) {
 }
 
 int main(int argc, char *argv[]) {
+  lcore_container::init(1);
   struct sigaction sa = {};
   sa.sa_handler = handler;
   sigaction(SIGINT, &sa, NULL);

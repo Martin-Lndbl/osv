@@ -198,7 +198,7 @@ public:
   mbuf *alloc_default(uint16_t data_len) {
     assert(data_len <= kMaxDataLen);
     obj_header *obj;
-    if (__builtin_expect(cache.mag_top > 0, 1)) {
+    if (likely(cache.mag_top > 0)) {
       obj = cache.mag[--cache.mag_top];
     } else {
       if (cache.partial.empty())
@@ -213,8 +213,8 @@ public:
       }
     }
     auto iova = obj->iova;
-    return new (obj) mbuf{nullptr, this,     iova,            kDefaultSize,
-                          1,       data_len, kDefaultHeadroom};
+    return new (obj)
+        mbuf{nullptr, this, iova, kDefaultSize, 1, data_len, kDefaultHeadroom};
   }
 
   void alloc_new_slab(slab_cache &c) {
@@ -239,12 +239,23 @@ public:
     assert(!cache.partial.empty());
   }
 
+  void alloc_bulk(rte_mbuf **bufs, unsigned n) {
+    auto from_mag = std::min<unsigned>(n, cache.mag_top);
+    if (from_mag) {
+      std::memcpy(bufs, &cache.mag[cache.mag_top - from_mag],
+                  from_mag * sizeof(void *));
+      cache.mag_top -= from_mag;
+    }
+    for (unsigned i = from_mag; i < n; ++i)
+      bufs[i] = alloc_default(0);
+  }
+
   void free_single_mbuf(mbuf *obj) {
     auto iptr = reinterpret_cast<intptr_t>(obj);
     auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
     auto *hdr = reinterpret_cast<obj_header *>(obj);
     hdr->iova = slb->iova + (iptr - reinterpret_cast<intptr_t>(slb));
-    if (__builtin_expect(cache.mag_top < slab_cache::kMagSize, 1)) {
+    if (likely(cache.mag_top < slab_cache::kMagSize)) {
       cache.mag[cache.mag_top++] = hdr;
       return;
     }

@@ -256,6 +256,11 @@ private:
     auto *s = cache.partial.front();
     obj = s->freelist;
     s->freelist = obj->next;
+    ++s->inuse;
+    if (!s->freelist) {
+      slab::list_remove(s);
+      cache.full.list_push(s);
+    }
     return obj;
   }
 

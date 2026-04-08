@@ -147,7 +147,6 @@ struct slab {
 
 struct slab_cache {
   static constexpr size_t kDefaultCacheSize = 128;
-  static constexpr size_t kMagSize = 256;
   struct slab_list {
     slab head, tail;
     slab_list() : head(), tail() {
@@ -168,17 +167,14 @@ struct slab_cache {
   };
   slab_list partial;
   slab_list full;
-  obj_header *mag[kMagSize];
-  size_t mag_top;
   size_t obj_size;
 
   slab_cache(size_t obj_size)
-      : partial(), full(), mag_top(0), obj_size(obj_size) {}
+      : partial(), full(), obj_size(obj_size) {}
 };
 
 inline void mbuf_free(mbuf *buf);
 
-using mbuf_ptr = std::unique_ptr<mbuf, decltype(&mbuf_free)>;
 using init_fn_t = void (*)(mbuf **, uint16_t, void *);
 class slab_allocator {
 public:
@@ -189,32 +185,78 @@ public:
   static constexpr size_t kSlabSize = 2 * 1024 * 1024;
 
 public:
-  slab_allocator(size_t obj_size = kDefaultSize, init_fn_t init_fn = nullptr,
-                 void *priv = nullptr)
-      : cache(obj_size), init_fn(init_fn), priv(priv) {
-    alloc_new_slab(cache);
+  slab_allocator(unsigned size, size_t obj_size = kDefaultSize,
+                 init_fn_t init_fn = nullptr, void *priv = nullptr)
+      : cache(obj_size), elems(size), init_fn(init_fn), priv(priv) {
+    for (auto &obj : elems)
+      obj = alloc_default(0);
+    top = size;
   }
 
-  mbuf *alloc_default(uint16_t data_len) {
-    assert(data_len <= kMaxDataLen);
-    obj_header *obj;
-    if (cache.mag_top > 0) {
-      obj = cache.mag[--cache.mag_top];
-    } else {
-      if (cache.partial.empty())
-        alloc_new_slab(cache);
-      auto *s = cache.partial.front();
-      obj = s->freelist;
-      s->freelist = obj->next;
-      ++s->inuse;
-      if (!s->freelist) {
-        slab::list_remove(s);
-        cache.full.list_push(s);
-      }
+  int alloc_bulk(mbuf **bufs, unsigned n) {
+    if (top < n)
+      return -ENOENT;
+    for (unsigned i = 0; i < n; ++i) {
+      auto *obj = elems[--top];
+      auto iova = obj->iova;
+      bufs[i] = new (obj)
+          mbuf{nullptr, this, iova, kDefaultSize, 1, 0, kDefaultHeadroom};
     }
+    return 0;
+  }
+
+  mbuf *alloc_single() {
+    if (!top)
+      return nullptr;
+    auto *obj = elems[--top];
     auto iova = obj->iova;
     return new (obj)
-        mbuf{nullptr, this, iova, kDefaultSize, 1, data_len, kDefaultHeadroom};
+          mbuf{nullptr, this, iova, kDefaultSize, 1, 0, kDefaultHeadroom};
+  }
+
+  void free_single_mbuf(mbuf *obj) {
+    auto iptr = reinterpret_cast<intptr_t>(obj);
+    auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
+    auto *hdr = reinterpret_cast<obj_header *>(obj);
+    hdr->iova = slb->iova + (iptr - reinterpret_cast<intptr_t>(slb));
+    assert(top < elems.size());
+    elems[top++] = hdr;
+  }
+
+  void free_mbuf(mbuf *obj) {
+    auto *obj_ptr = obj;
+    while (obj_ptr) {
+      auto *next = obj_ptr->next;
+      free_single_mbuf(obj_ptr);
+      obj_ptr = next;
+    }
+  }
+
+  constexpr size_t get_data_size() const { return kDefaultSize; }
+
+  ~slab_allocator() {
+    auto free_slabs = [](slab_cache::slab_list &list) {
+      auto *s = list.head.next;
+      while (s != &list.tail) {
+        auto *next = s->next;
+        memory::free_huge_page(s, mmu::huge_page_size);
+        s = next;
+      }
+    };
+    free_slabs(cache.partial);
+    free_slabs(cache.full);
+  }
+
+private:
+  obj_header *alloc_default(uint16_t data_len) {
+    assert(data_len <= kMaxDataLen);
+    obj_header *obj;
+    if (cache.partial.empty())
+        alloc_new_slab(cache);
+    auto *s = cache.partial.front();
+    obj = s->freelist;
+    s->freelist = obj->next;
+    return obj;
   }
 
   void alloc_new_slab(slab_cache &c) {
@@ -238,73 +280,9 @@ public:
     c.partial.list_push(s);
     assert(!cache.partial.empty());
   }
-
-  void alloc_bulk(mbuf **bufs, unsigned n) {
-    auto from_mag = std::min<unsigned>(n, cache.mag_top);
-    if (from_mag) { 
-      cache.mag_top -= from_mag;
-      for(unsigned i = 0; i < from_mag; ++i){
-        auto *obj = cache.mag[cache.mag_top + i];  
-        auto iova = obj->iova;
-        bufs[i] = new (obj)
-        mbuf{nullptr, this, iova, kDefaultSize, 1, 0, kDefaultHeadroom};
-      }
-
-    }
-    for (unsigned i = from_mag; i < n; ++i)
-      bufs[i] = alloc_default(0);
-  }
-
-  void free_single_mbuf(mbuf *obj) {
-    auto iptr = reinterpret_cast<intptr_t>(obj);
-    auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
-    auto *hdr = reinterpret_cast<obj_header *>(obj);
-    hdr->iova = slb->iova + (iptr - reinterpret_cast<intptr_t>(slb));
-    if (cache.mag_top < slab_cache::kMagSize) {
-      cache.mag[cache.mag_top++] = hdr;
-      return;
-    }
-    bool was_full = !slb->freelist;
-    hdr->next = slb->freelist;
-    slb->freelist = hdr;
-    --slb->inuse;
-    if (was_full) {
-      slab::list_remove(slb);
-      cache.partial.list_push(slb);
-    }
-  }
-
-  void free_mbuf(mbuf *obj) {
-    auto *obj_ptr = obj;
-    while (obj_ptr) {
-      auto *next = obj_ptr->next;
-      free_single_mbuf(obj_ptr);
-      obj_ptr = next;
-    }
-  }
-
-  constexpr size_t get_data_size() const { return kDefaultSize; }
-
-  mbuf_ptr alloc_default_safe(uint16_t data_len) {
-    auto *pkt = alloc_default(data_len);
-    return mbuf_ptr(pkt, mbuf_free);
-  }
-
-  ~slab_allocator() {
-    auto free_slabs = [](slab_cache::slab_list &list) {
-      auto *s = list.head.next;
-      while (s != &list.tail) {
-        auto *next = s->next;
-        memory::free_huge_page(s, mmu::huge_page_size);
-        s = next;
-      }
-    };
-    free_slabs(cache.partial);
-    free_slabs(cache.full);
-  }
-
-private:
   slab_cache cache;
+  std::vector<obj_header *> elems;
+  unsigned top = 0;
 
 public:
   init_fn_t init_fn;
@@ -312,7 +290,9 @@ public:
 };
 
 inline mbuf *alloc_mbuf(slab_allocator *sb, size_t size) {
-  return sb->alloc_default(size);
+  auto *mb = sb->alloc_single();
+  mb->data_len = mb->pkt_len = size;
+  return mb;
 }
 
 inline void mbuf_free(mbuf *buf) {
@@ -322,7 +302,4 @@ inline void mbuf_free(mbuf *buf) {
   buf->pool->free_mbuf(buf);
 }
 
-inline mbuf_ptr mbuf_take_owner_ship(mbuf *pkt) {
-  return mbuf_ptr(pkt, &mbuf_free);
-}
 } // namespace minidpdk

@@ -241,10 +241,15 @@ public:
 
   void alloc_bulk(mbuf **bufs, unsigned n) {
     auto from_mag = std::min<unsigned>(n, cache.mag_top);
-    if (from_mag) {
-      std::memcpy(bufs, &cache.mag[cache.mag_top - from_mag],
-                  from_mag * sizeof(void *));
+    if (from_mag) { 
       cache.mag_top -= from_mag;
+      for(unsigned i = 0; i < from_mag; ++i){
+        auto *obj = cache.mag[cache.mag_top + i];  
+        auto iova = obj->iova;
+        bufs[i] = new (obj)
+        mbuf{nullptr, this, iova, kDefaultSize, 1, 0, kDefaultHeadroom};
+      }
+
     }
     for (unsigned i = from_mag; i < n; ++i)
       bufs[i] = alloc_default(0);

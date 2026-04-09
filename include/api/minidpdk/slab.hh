@@ -66,7 +66,6 @@ struct mbuf {
   // NIC offload flags
   uint64_t ol_flags;
 
-
   rte_mbuf_ext_shared_info *shinfo;
 
   // type of the packet

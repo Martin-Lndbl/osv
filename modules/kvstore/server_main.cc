@@ -16,7 +16,9 @@
 #include <memory>
 #include <minidpdk/dev.hh>
 #include <minidpdk/lcore.hh>
+#include <minidpdk/mem.hh>
 #include <minidpdk/net.hh>
+#include <minidpdk/slab.hh>
 #include <minidpdk/time.hh>
 #include <signal.h>
 #include <utility>
@@ -123,6 +125,22 @@ int lcore_server_fun(void *arg) {
   return 0;
 }
 
+static void free_cb(void*, void* mb){
+    mbuf_free(static_cast<mbuf*>(mb));
+}
+
+static void init(minidpdk::mbuf **pkts, uint16_t n, void* priv){
+    auto *sb = static_cast<slab_allocator*>(priv);
+    for(unsigned i = 0; i < n; ++i){
+        auto *app_mbuf = sb->alloc_default(0);
+        auto *ext = get_new_backend_data<minidpdk::rte_mbuf_ext_shared_info>(app_mbuf);
+        ext->refcnt = 1;
+        ext->fcb_opaque = app_mbuf;
+        ext->free_cb = free_cb;
+        rte_pktmbuf_attach_extbuf(pkts[i], app_mbuf->data<uint8_t*>(), sb->get_iova(app_mbuf, 0), sb->kMaxDataLen, ext); 
+    }
+}
+
 int run(netconfig &conf) {
   bench::prepare(store, len);
 
@@ -141,7 +159,7 @@ int run(netconfig &conf) {
   RTE_LCORE_FOREACH(lcore_id) {
     sbs.emplace_back(std::make_unique<slab_allocator>());
     allocators.emplace_back(
-        dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 4095));
+        dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 4095, sbs.back().get(), init));
     lcore_ids.push_back(lcore_id);
     ++i;
   }

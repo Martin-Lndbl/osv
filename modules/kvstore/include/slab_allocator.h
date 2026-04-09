@@ -17,7 +17,8 @@ class slab_allocator;
 struct mbuf {
   slab_allocator *sb;
   mbuf *next;
-  uint32_t size : 28;
+  uint32_t size : 20;
+  uint32_t nb_segs :8;
   uint32_t size_class : 4;
   uint16_t data_len;
   uint16_t headroom : 10;
@@ -26,7 +27,7 @@ struct mbuf {
   mbuf() = default;
   mbuf(slab_allocator *sb, mbuf *next, uint32_t size, uint32_t size_class,
        uint16_t data_len, uint16_t headroom)
-      : sb(sb), next(next), size(size), size_class(size_class),
+      : sb(sb), next(next), size(size), nb_segs(1), size_class(size_class),
         data_len(data_len), headroom(headroom), refcnt(1) {}
 
   uint8_t *buf_start() {
@@ -165,8 +166,8 @@ class slab_allocator {
   static constexpr unsigned kSizeClassCnt = 2;
 
 public:
-  static constexpr size_t kDefaultHeadroom = 20;
-  static constexpr size_t kMaxDataLen = 1500 - protocol::defs::kHeaderMTUlen;
+  static constexpr size_t kDefaultHeadroom = 64;
+  static constexpr size_t kMaxDataLen = 1500 + 20;
   static constexpr size_t kDefaultSize =
       kMaxDataLen + kDefaultHeadroom + sizeof(mbuf);
   static constexpr size_t kSlabSize = 2 * 1024 * 1024;
@@ -182,11 +183,11 @@ public:
   slab_allocator()
       : caches{slab_cache(kDefaultSize), slab_cache(kDefaultJumboSize)} {}
 
-  template <unsigned cl, size_t mbuf_size, size_t hdroom, bool iova>
+  template <unsigned cl, size_t mbuf_size, size_t hdroom>
   mbuf *alloc(uint16_t data_len) {
     auto &cache = caches[cl];
     if (cache.partial.empty())
-      alloc_new_slab<iova>(cache);
+      alloc_new_slab(cache);
     auto *s = cache.partial.front();
     auto *obj = s->freelist;
     s->freelist = obj->next;
@@ -200,18 +201,18 @@ public:
 
   mbuf *alloc_default(uint16_t data_len) {
     assert(data_len <= kMaxDataLen);
-    return alloc<0, kDefaultSize, kDefaultHeadroom, false>(data_len);
+    return alloc<0, kDefaultSize, kDefaultHeadroom>(data_len);
   }
 
   mbuf *alloc_large() {
-    return alloc<1, kDefaultJumboSize, kJumboHeadroom, true>(kMaxJumboDataLen);
+    return alloc<1, kDefaultJumboSize, kJumboHeadroom>(kMaxJumboDataLen);
   }
 
   static uintptr_t virt_to_phys(void *vaddr) {
     return mmu::virt_to_phys(vaddr);
   }
 
-  template <bool iova = false> void alloc_new_slab(slab_cache &c) {
+void alloc_new_slab(slab_cache &c) {
     auto *region =
         mmap(nullptr, kSlabSize, PROT_READ | PROT_WRITE,
              MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0);

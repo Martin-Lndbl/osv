@@ -8,7 +8,6 @@
 #include "base/ena_eth_com.h"
 #include "ena_ethdev.h"
 #include "ena_if.h"
-#include "msr.hh"
 #include "osv/aligned_new.hh"
 #include "osv/mmu-defs.hh"
 #include "osv/msi.hh"
@@ -262,11 +261,6 @@ static uint64_t ena_get_tx_port_offloads(struct ena_adapter *adapter);
 static uint64_t ena_get_rx_queue_offloads(struct ena_adapter *adapter);
 static uint64_t ena_get_tx_queue_offloads(struct ena_adapter *adapter);
 
-uint16_t rx_burst(rte_eth_dev* dev, uint16_t qid, rte_mbuf **rx_pkts,
-                               uint16_t nb_pkts);
-uint16_t tx_burst(rte_eth_dev* dev, uint16_t qid, rte_mbuf **tx_pkts,
-                               uint16_t nb_pkts);
-
 static int ena_infos_get(struct rte_eth_dev *dev,
                          struct rte_eth_dev_info *dev_info);
 
@@ -435,6 +429,8 @@ static inline void ena_rx_mbuf_prepare(struct ena_ring *rx_ring, rte_mbuf *mbuf,
   } else {
     ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_UNKNOWN;
   }
+
+  printf("%lu\n", ena_rx_ctx->timestamp);
 
   mbuf->ol_flags = ol_flags;
   mbuf->packet_type = packet_type;
@@ -1043,7 +1039,7 @@ static int ena_populate_rx_queue(ena_ring *rxq, unsigned int count) {
   /* When we submitted free resources to device... */
   if (likely(i > 0)) {
     /* ...let HW know that it can fill buffers with data. */
-    ena_com_write_sq_doorbell(rxq->ena_com_io_sq);
+    ena_com_write_tx_sq_doorbell(rxq->ena_com_io_sq);
 
     rxq->next_to_use = next_to_use;
   }
@@ -1557,6 +1553,8 @@ static int ena_infos_get(rte_eth_dev *dev, rte_eth_dev_info *dev_info) {
  * ********************************************************************/
 
 static inline void ena_init_rx_mbuf(rte_mbuf *mbuf, uint16_t len) {
+  mbuf->data_offset = 128;  
+  mbuf->refcnt = 1;  
   mbuf->data_len = len;
   mbuf->next = NULL;
 }
@@ -1588,6 +1586,7 @@ static rte_mbuf *ena_rx_mbuf(struct ena_ring *rx_ring,
   mbuf_head->nb_segs = descs;
   // mbuf_head->port = rx_ring->port_id;
   mbuf_head->pkt_len = len;
+  mbuf_head->data_offset += offset;
 
   rx_info->mbuf = NULL;
   rx_ring->empty_rx_reqs[ntc] = req_id;
@@ -1777,7 +1776,7 @@ static int ena_xmit_mbuf(ena_ring *tx_ring, rte_mbuf *mbuf) {
                 "LLQ Tx max burst size of queue %d achieved, writing doorbell "
                 "to send burst",
                 tx_ring->id);
-    ena_com_write_sq_doorbell(tx_ring->ena_com_io_sq);
+    ena_com_write_tx_sq_doorbell(tx_ring->ena_com_io_sq);
     tx_ring->tx_stats.doorbells++;
     tx_ring->pkts_without_db = false;
   }
@@ -1810,6 +1809,7 @@ static int ena_tx_cleanup(void *txp, uint32_t free_pkt_cnt) {
   unsigned int total_tx_descs = 0;
   unsigned int total_tx_pkts = 0;
   uint16_t cleanup_budget;
+  uint64_t hw_timestamp = 0;
   uint16_t next_to_clean = tx_ring->next_to_clean;
   bool fast_free = tx_ring->offloads & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 
@@ -1825,7 +1825,7 @@ static int ena_tx_cleanup(void *txp, uint32_t free_pkt_cnt) {
     struct ena_tx_buffer *tx_info;
     uint16_t req_id;
 
-    if (ena_com_tx_comp_req_id_get(tx_ring->ena_com_io_cq, &req_id) != 0)
+    if (ena_com_tx_comp_metadata_get(tx_ring->ena_com_io_cq, &req_id, &hw_timestamp) != 0)
       break;
 
     if (unlikely(validate_tx_req_id(tx_ring, req_id) != 0))
@@ -2184,7 +2184,7 @@ uint16_t tx_burst(rte_eth_dev* dev, uint16_t qid, rte_mbuf **tx_pkts,
   /* If there are ready packets to be xmitted... */
   if (likely(tx_ring->pkts_without_db)) {
     /* ...let HW do its best :-) */
-    ena_com_write_sq_doorbell(tx_ring->ena_com_io_sq);
+    ena_com_write_tx_sq_doorbell(tx_ring->ena_com_io_sq);
     tx_ring->tx_stats.doorbells++;
     tx_ring->pkts_without_db = false;
   }
@@ -2517,7 +2517,7 @@ int ena_attach(pci::device *dev, ena_adapter **_adapter) {
   memcpy(edev->data.mac_addr.addr.data(), adapter->mac_addr,
          sizeof(adapter->mac_addr));
 
-  rc = ena_com_rss_init(ena_dev, ENA_RX_RSS_TABLE_LOG_SIZE);
+  rc = ena_com_rss_init(ena_dev);
   if (unlikely(rc != 0)) {
     ena_log_raw(ERR, "Failed to initialize RSS in ENA device");
     goto err_delete_debug_area;

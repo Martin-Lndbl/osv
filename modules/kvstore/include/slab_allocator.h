@@ -213,7 +213,9 @@ public:
   }
 
 void alloc_new_slab(slab_cache &c) {
-    auto *region = memory::alloc_huge_page(mmu::huge_page_size);
+    auto *region =
+        mmap(nullptr, kSlabSize, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0);
     assert(region != MAP_FAILED);
     auto *s = new (region) slab();
     // prefault, MAP_POPULATE may fail
@@ -283,7 +285,8 @@ void alloc_new_slab(slab_cache &c) {
       auto *s = list.head.next;
       while (s != &list.tail) {
         auto *next = s->next;
-        memory::free_huge_page(s, mmu::huge_page_size);
+        munmap(s, kSlabSize);
+        
         s = next;
       }
     };

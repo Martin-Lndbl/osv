@@ -187,7 +187,11 @@ inline int rte_pktmbuf_chain(rte_mbuf* head, rte_mbuf *tail){
     head->pkt_len += tail->pkt_len;
     tail->pkt_len = tail->data_len;
     return 0;
+}
 
+inline void rte_pktmbuf_detach(rte_mbuf* mbuf){
+    mbuf->shinfo = nullptr;
+    mbuf->ol_flags &= ~RTE_MBUF_F_EXTERNAL;
 }
 
 #define rte_pktmbuf_mtod(m, t) m->data<std::remove_pointer<t>::type>()

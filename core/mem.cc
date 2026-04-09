@@ -1,4 +1,3 @@
-#include <bit>
 #include <minidpdk/mem.hh>
 #include <minidpdk/slab.hh>
 #include <cassert>
@@ -8,7 +7,7 @@
 #include <osv/trace.hh>
 
 void inline free_internal(rte_mbuf* buf){
-  if(buf->ol_flags & RTE_MBUF_F_EXTERNAL){
+  if(buf->ol_flags & RTE_MBUF_F_EXTERNAL || buf->shinfo){
       assert(buf->shinfo->refcnt > 0);
       --buf->shinfo->refcnt;
       if(!buf->shinfo->refcnt)

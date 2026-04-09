@@ -74,13 +74,13 @@ struct mbuf {
   mbuf() = default;
   mbuf(mbuf *next, slab_allocator *sb, uintptr_t iova, uint32_t size,
        uint16_t nb_segs, uint16_t data_len, uint16_t headroom)
-      : next(next), buf_addr(reinterpret_cast<char *>(this)),
+      : next(next), buf_addr(reinterpret_cast<char *>(this) + sizeof(mbuf)),
         pool(sb), iova(iova + sizeof(mbuf) + headroom), data_offset(headroom),
         pkt_len(), data_len(data_len), buf_len(size), refcnt(1),
-        nb_segs(nb_segs), shinfo(nullptr) {}
+        nb_segs(nb_segs), ol_flags(), shinfo(nullptr) {}
 
   uint8_t *buf_start() {
-    return reinterpret_cast<uint8_t *>(buf_addr) + sizeof(mbuf);
+    return reinterpret_cast<uint8_t *>(buf_addr);
   }
 
   template <typename T> T *data(size_t offset = 0) {

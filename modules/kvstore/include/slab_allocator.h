@@ -213,11 +213,9 @@ public:
   }
 
 void alloc_new_slab(slab_cache &c) {
-    auto *region =
-        mmap(nullptr, kSlabSize, PROT_READ | PROT_WRITE,
-             MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0);
+    auto *region = memory::alloc_huge_page(mmu::huge_page_size);
     assert(region != MAP_FAILED);
-    auto *s = static_cast<slab *>(region);
+    auto *s = new (region) slab();
     // prefault, MAP_POPULATE may fail
     *reinterpret_cast<volatile uint64_t *>(region) = 0;
     s->iova = virt_to_phys(region);
@@ -285,7 +283,7 @@ void alloc_new_slab(slab_cache &c) {
       auto *s = list.head.next;
       while (s != &list.tail) {
         auto *next = s->next;
-        munmap(s, kSlabSize);
+        memory::free_huge_page(s, mmu::huge_page_size);
         s = next;
       }
     };

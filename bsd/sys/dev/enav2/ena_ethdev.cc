@@ -430,8 +430,6 @@ static inline void ena_rx_mbuf_prepare(struct ena_ring *rx_ring, rte_mbuf *mbuf,
     ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_UNKNOWN;
   }
 
-  printf("%lu\n", ena_rx_ctx->timestamp);
-
   mbuf->ol_flags = ol_flags;
   mbuf->packet_type = packet_type;
 }
@@ -1553,7 +1551,6 @@ static int ena_infos_get(rte_eth_dev *dev, rte_eth_dev_info *dev_info) {
  * ********************************************************************/
 
 static inline void ena_init_rx_mbuf(rte_mbuf *mbuf, uint16_t len) {
-  mbuf->data_offset = 128;  
   mbuf->refcnt = 1;  
   mbuf->data_len = len;
   mbuf->next = NULL;

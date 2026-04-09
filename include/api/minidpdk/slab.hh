@@ -142,6 +142,7 @@ inline void mbuf_free(mbuf *buf);
 struct alignas(64) slab {
   slab *next;
   slab *prev;
+  obj_header *freelist;
   uint32_t inuse;
   uint32_t padding;
   uintptr_t iova;
@@ -151,7 +152,7 @@ struct alignas(64) slab {
     s->next->prev = s->prev;
   }
 
-  slab() : next(nullptr), prev(nullptr),  inuse() {}
+  slab() : next(nullptr), prev(nullptr), freelist(nullptr), inuse() {}
 };
 
 static_assert(sizeof(slab) % 64 == 0, "");
@@ -180,15 +181,13 @@ struct slab_cache {
     slab *front() { return head.next; }
   };
 
-  obj_header *freelist;
-
   slab_list partial;
   slab_list full;
   std::array<obj_header *, kDefaultCacheSize> mag;
   unsigned top = 0;
   size_t obj_size;
 
-  slab_cache(size_t obj_size) : freelist(nullptr), partial(), full(), obj_size(obj_size) {}
+  slab_cache(size_t obj_size) : partial(), full(), obj_size(obj_size) {}
 };
 
 inline void mbuf_free(mbuf *buf);
@@ -212,12 +211,16 @@ public:
     if (cache.top) {
       obj = cache.mag[--cache.top];
     } else {
-      if (!cache.freelist)
+      if (cache.partial.empty())
         alloc_new_slab(cache);
       auto *s = cache.partial.front();
-      obj = cache.freelist;
-      cache.freelist = obj->next;
+      obj = s->freelist;
+      s->freelist = obj->next;
       ++s->inuse;
+      if (!s->freelist) {
+        slab::list_remove(s);
+        cache.full.list_push(s);
+      }
     }
     assert(obj);
     return new (obj) mbuf{nullptr, this,     obj->iova,       kDefaultSize,
@@ -231,7 +234,7 @@ public:
           std::memcpy(pkts, cache.mag.data() + cache.top, from_cache * sizeof(void*));
           for(auto i = 0u; i < from_cache; ++i){
               auto *obj = reinterpret_cast<obj_header*>(pkts[i]);
-              rte_prefetch0_write(cache.mag.data() + cache.top + 3);
+              rte_prefetch0_write(pkts + 3);
               new (obj) mbuf{nullptr, this,     obj->iova,       kDefaultSize,
                           1,       0, kDefaultHeadroom};
           }
@@ -252,7 +255,7 @@ public:
     auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab);
     s->iova = mmu::virt_to_phys(s);
     size_t off = color;
-    cache.freelist = new (base + off) obj_header;
+    s->freelist = new (base + off) obj_header;
     size_t space = kSlabSize - sizeof(slab);
     while (off + 2 * c.obj_size <= space) {
       auto *obj = reinterpret_cast<obj_header *>(base + off);
@@ -270,14 +273,23 @@ public:
   }
 
   __inline void free_single_mbuf(mbuf *obj) {
+    auto iptr = reinterpret_cast<intptr_t>(obj);
+    auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
+    bool was_full = !slb->freelist;
     auto *hdr = reinterpret_cast<obj_header *>(obj);
-    hdr->iova = obj->iova;
+    hdr->iova = slb->iova + (reinterpret_cast<uintptr_t>(obj) -
+                             reinterpret_cast<uintptr_t>(slb));
     if (cache.top < slab_cache::kDefaultCacheSize) {
       hdr->next = nullptr;
       cache.mag[cache.top++] = hdr;
     } else {
-      hdr->next = cache.freelist;
-      cache.freelist = hdr;
+      hdr->next = slb->freelist;
+      slb->freelist = hdr;
+      --slb->inuse;
+      if (was_full) {
+        slab::list_remove(slb);
+        cache.partial.list_push(slb);
+      }
     }
   }
 

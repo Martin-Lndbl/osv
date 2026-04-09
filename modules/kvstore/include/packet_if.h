@@ -282,11 +282,11 @@ public:
       auto *pkt = consume_pkt(vec.pkts[i]);
       if (!pkt)
         continue;
-      auto *mb = static_cast<mbuf*>(vec.pkts[i]->shinfo->fcb_opaque);
+      auto *mb = static_cast<mbuf*>(pkt->shinfo->fcb_opaque);
       mb->adj(protocol::defs::kftOffset);
-      mbufs.pkts[valid++] = static_cast<mbuf*>(vec.pkts[i]->shinfo->fcb_opaque);
-      rte_pktmbuf_detach(pkts[i]);
-      rte_pktmbuf_free(pkts[i]);
+      mbufs.pkts[valid++] = static_cast<mbuf*>(pkt->shinfo->fcb_opaque);
+      rte_pktmbuf_detach(pkt);
+      rte_pktmbuf_free(pkt);
     }
     mbufs.i = valid;
     assert(mbufs.i == valid);

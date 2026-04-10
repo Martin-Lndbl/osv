@@ -288,6 +288,8 @@ public:
             (*last)->adj(protocol::defs::kftOffset);
             first = false;
           }
+          (*last)->data_len = cur->data_len;
+          (*last)->nb_segs = 1;
           rte_pktmbuf_detach(cur);
           last = &(*last)->next;
           ++segs;

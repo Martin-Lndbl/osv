@@ -284,13 +284,14 @@ public:
       bool first = true;
       while(cur){
           *last = static_cast<mbuf*>(cur->shinfo->fcb_opaque);
+          (*last)->data_len = cur->data_len;
+          (*last)->nb_segs = 1;
           if(first){
             (*last)->adj(protocol::defs::kftOffset);
             first = false;
           }
-          (*last)->data_len = cur->data_len;
-          (*last)->nb_segs = 1;
           rte_pktmbuf_detach(cur);
+          assert(cur->shinfo == nullptr);
           last = &(*last)->next;
           ++segs;
           cur = cur->next;

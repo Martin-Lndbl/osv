@@ -281,12 +281,17 @@ public:
       mbuf* head = nullptr;
       mbuf** last = &head;
       uint16_t segs = 0;
+      bool first = true;
       while(cur){
-          *last = static_cast<mbuf*>(pkt->shinfo->fcb_opaque);
-          (*last)->adj(protocol::defs::kftOffset);
-          rte_pktmbuf_detach(pkt);
+          *last = static_cast<mbuf*>(cur->shinfo->fcb_opaque);
+          if(first){
+            (*last)->adj(protocol::defs::kftOffset);
+            first = false;
+          }
+          rte_pktmbuf_detach(cur);
           last = &(*last)->next;
           ++segs;
+          cur = cur->next;
       }
       head->nb_segs = segs;
       *last = nullptr;

@@ -273,23 +273,40 @@ public:
     return head;
   }
 
+
+  mbuf* format_mbuf(rte_mbuf* pkt, flow_tuple& ft){
+      strip_ether_ip(pkt, ft);
+      strip_udp(pkt, ft);
+      rte_mbuf* cur = pkt;
+      mbuf* head = nullptr;
+      mbuf** last = &head;
+      uint16_t segs = 0;
+      while(cur){
+          *last = static_cast<mbuf*>(pkt->shinfo->fcb_opaque);
+          (*last)->adj(protocol::defs::kftOffset);
+          rte_pktmbuf_detach(pkt);
+          last = &(*last)->next;
+          ++segs;
+      }
+      head->nb_segs = segs;
+      *last = nullptr;
+      rte_pktmbuf_free(pkt);
+      return head;
+  }
+
   void fetch_from_qpair(std::array<flow_tuple, kDefaultInBurstSize> &fts,
                         packet_vector<mbuf *, kDefaultInBurstSize> &mbufs) {
-    uint16_t valid = 0, out = 0;
+    uint16_t valid = 0;
     assert(vec.i == 0);
     qp->rx_burst(vec);
     for (uint16_t i = 0; i < vec.i; ++i) {
       auto *pkt = consume_pkt(vec.pkts[i]);
       if (!pkt)
         continue;
-      auto *mb = static_cast<mbuf*>(pkt->shinfo->fcb_opaque);
-      mb->adj(protocol::defs::kftOffset);
-      mbufs.pkts[valid++] = static_cast<mbuf*>(pkt->shinfo->fcb_opaque);
-      rte_pktmbuf_detach(pkt);
-      rte_pktmbuf_free(pkt);
+      mbufs.pkts[valid] = format_mbuf(pkt, fts[valid]);
+      ++valid;
     }
     mbufs.i = valid;
-    assert(mbufs.i == valid);
     vec.clear();
   }
 

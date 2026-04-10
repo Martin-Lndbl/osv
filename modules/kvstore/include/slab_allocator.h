@@ -14,11 +14,11 @@
 #define RTE_BAD_IOVA (0ull)
 class slab_allocator;
 
-struct mbuf {
+struct alignas(64) mbuf {
   slab_allocator *sb;
   mbuf *next;
   uint32_t size : 20;
-  uint32_t nb_segs :8;
+  uint32_t nb_segs : 8;
   uint32_t size_class : 4;
   uint16_t data_len;
   uint16_t headroom : 10;
@@ -34,8 +34,16 @@ struct mbuf {
     return reinterpret_cast<uint8_t *>(this) + sizeof(mbuf);
   }
 
+  const uint8_t *buf_start() const {
+    return reinterpret_cast<const uint8_t *>(this) + sizeof(mbuf);
+  }
+
   template <typename T> T *data(size_t offset = 0) {
     return reinterpret_cast<T *>(buf_start() + headroom + offset);
+  }
+
+  template <typename T> const T *data(size_t offset = 0) const {
+    return reinterpret_cast<const T *>(buf_start() + headroom + offset);
   }
 
   void read(void *buf) {
@@ -146,6 +154,8 @@ struct slab_cache {
   slab_list full;
   size_t obj_size;
 
+  std::array<obj_header *, kDefaultCacheSize> local_cache;
+  unsigned top = 0;
   slab_cache(size_t obj_size) : partial(), full(), obj_size(obj_size) {}
 };
 
@@ -186,15 +196,20 @@ public:
   template <unsigned cl, size_t mbuf_size, size_t hdroom>
   mbuf *alloc(uint16_t data_len) {
     auto &cache = caches[cl];
-    if (cache.partial.empty())
-      alloc_new_slab(cache);
-    auto *s = cache.partial.front();
-    auto *obj = s->freelist;
-    s->freelist = obj->next;
-    ++s->inuse;
-    if (!s->freelist) {
-      slab::list_remove(s);
-      cache.full.list_push(s);
+    obj_header *obj = nullptr;
+    if (cache.top) {
+      obj = cache.local_cache[--cache.top];
+    } else {
+      if (cache.partial.empty())
+        alloc_new_slab(cache);
+      auto *s = cache.partial.front();
+      obj = s->freelist;
+      s->freelist = obj->next;
+      ++s->inuse;
+      if (!s->freelist) {
+        slab::list_remove(s);
+        cache.full.list_push(s);
+      }
     }
     return new (obj) mbuf{this, nullptr, mbuf_size, cl, data_len, hdroom};
   }
@@ -212,7 +227,7 @@ public:
     return mmu::virt_to_phys(vaddr);
   }
 
-void alloc_new_slab(slab_cache &c) {
+  void alloc_new_slab(slab_cache &c) {
     auto *region =
         mmap(nullptr, kSlabSize, PROT_READ | PROT_WRITE,
              MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0);
@@ -237,7 +252,7 @@ void alloc_new_slab(slab_cache &c) {
     c.partial.list_push(s);
   }
 
-  uintptr_t get_iova(mbuf *obj, unsigned off) const {
+  inline uintptr_t get_iova(const mbuf *obj, const unsigned off) const {
     auto iptr = reinterpret_cast<intptr_t>(obj);
     auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
     return slb->iova +
@@ -250,14 +265,18 @@ void alloc_new_slab(slab_cache &c) {
     assert(cache.obj_size == obj->size);
     auto iptr = reinterpret_cast<intptr_t>(obj);
     auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
-    bool was_full = !slb->freelist;
     auto *hdr = reinterpret_cast<obj_header *>(obj);
-    hdr->next = slb->freelist;
-    slb->freelist = hdr;
-    --slb->inuse;
-    if (was_full) {
-      slab::list_remove(slb);
-      cache.partial.list_push(slb);
+    if (cache.top < cache.kDefaultCacheSize) {
+      cache.local_cache[cache.top++] = hdr;
+    } else {
+      bool was_full = !slb->freelist;
+      hdr->next = slb->freelist;
+      slb->freelist = hdr;
+      --slb->inuse;
+      if (was_full) {
+        slab::list_remove(slb);
+        cache.partial.list_push(slb);
+      }
     }
   }
 
@@ -286,7 +305,7 @@ void alloc_new_slab(slab_cache &c) {
       while (s != &list.tail) {
         auto *next = s->next;
         munmap(s, kSlabSize);
-        
+
         s = next;
       }
     };

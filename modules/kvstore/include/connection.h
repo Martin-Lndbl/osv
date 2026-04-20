@@ -109,6 +109,7 @@ public:
   }
 
   void run(concurrency::scheduler &scheduler);
+  uint64_t run_loop_head(concurrency::scheduler& scheduler); 
 
   void fetch_from_qpair() {
     std::array<flow_tuple, packet_if::kDefaultInBurstSize> fts;

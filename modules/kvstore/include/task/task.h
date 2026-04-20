@@ -141,19 +141,22 @@ template <typename C> struct recv_awaitable_sgl : io_awaitable_sgl<C> {
 
 class scheduler {
   using task_handle = std::coroutine_handle<task::promise_type>;
+  static constexpr uint64_t kRoundDurationUs = 30;
 
 public:
   scheduler() = default;
 
   void schedule(task_handle handle) { tasks.push_back(handle); }
 
-  void run() {
-    run([]() { return false; });
+  template <typename F> void run(F &&f) {
+    run([]() { return false; }, f);
   }
 
-  template <typename F> void run(F &&cb) {
+  template <typename F, typename C> void run(F &&cb, C &&nf) {
     auto task_num = tasks.size();
+    auto last = rte_get_timer_cycles();
     for (auto i = 0u; i < task_num; ++i) {
+      auto round = rte_get_timer_cycles();
       auto t = tasks.front();
       tasks.pop_front();
       t.resume();
@@ -162,11 +165,16 @@ public:
 
       if (cb())
         return;
+      if (last + round_duration < round) {
+        nf();
+        last = round;
+      }
     }
   }
 
 private:
   std::deque<task_handle> tasks;
+  const uint64_t round_duration = get_ticks_us() * kRoundDurationUs;
 };
 
 using coro_handle = std::coroutine_handle<task::promise_type>;

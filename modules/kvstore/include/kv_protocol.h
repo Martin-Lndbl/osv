@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <new>
+#include "slab_allocator.h"
 namespace kv{
 static constexpr uint16_t payload_offset = 0;  
 enum class packet_t : uint8_t {
@@ -70,3 +71,28 @@ inline void create_kv_scan(uint8_t *data, uint64_t id, int64_t low,
   kv_scn->payload.high = high;
 }
 }; // namespace kv
+
+struct batch{
+    batch(mbuf_ptr& buf): buf(std::move(buf)), off(0){}
+    batch(): buf(mbuf_take_owner_ship(nullptr)){}
+
+    template<typename T>
+    T* next(uint32_t len){
+        if(len + off > buf->sb->kMaxDataLen)
+            return nullptr;
+        return reinterpret_cast<T*>(buf->data<T>(off));
+    }
+
+    void finalize(uint32_t len){
+        off += len;
+    }
+
+    mbuf_ptr&& release() &&{
+        assert(off < buf->sb->kMaxDataLen);
+        buf->data_len = off;
+        return std::move(buf);
+    }
+
+    mbuf_ptr buf;
+    uint32_t off;
+};

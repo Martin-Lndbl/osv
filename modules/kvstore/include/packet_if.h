@@ -120,7 +120,7 @@ public:
     auto iova = pkt->sb->get_iova(pkt, sizeof(protocol::ft_header));
     assert(iova != RTE_BAD_IOVA);
     assert(pkt->size_class == 1);
-    assert(pkt->size == slab_allocator::kDefaultJumboSize);
+    assert(pkt->dataroom == slab_allocator::kMaxJumboDataLen);
     assert(
         (reinterpret_cast<uintptr_t>(data) & (slab_allocator::kSlabSize - 1)) ==
         (iova & (slab_allocator::kSlabSize - 1)));
@@ -284,13 +284,14 @@ public:
       bool first = true;
       while(cur){
           *last = static_cast<mbuf*>(cur->shinfo->fcb_opaque);
+          (*last)->data_len = cur->data_len;
+          (*last)->nb_segs = 1;
           if(first){
             (*last)->adj(protocol::defs::kftOffset);
             first = false;
           }
-          (*last)->data_len = cur->data_len;
-          (*last)->nb_segs = 1;
           rte_pktmbuf_detach(cur);
+          assert(cur->shinfo == nullptr);
           last = &(*last)->next;
           ++segs;
           cur = cur->next;

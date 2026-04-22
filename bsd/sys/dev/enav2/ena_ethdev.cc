@@ -12,6 +12,7 @@
 #include "osv/mmu-defs.hh"
 #include "osv/msi.hh"
 #include "osv/osv_c_wrappers.h"
+#include "osv/rcu.hh"
 #include "osv/sched.hh"
 #include "osv/virt_to_phys.hh"
 #include "processor.hh"
@@ -1326,21 +1327,63 @@ static int ena_set_queues_placement_policy(
 }
 
 void ena_eth_dev::setup_memory(){
-  auto *adapter =get<ena_adapter>();
-  auto addr = adapter->dev_mem->get_addr64();
-  auto sz = adapter->dev_mem->get_size();
-  processor::write_cr3(processor::read_cr3());
+      auto *adapter = get<ena_adapter>();
+    auto addr = adapter->dev_mem->get_addr64();
+    auto sz = adapter->dev_mem->get_size();
 
-  uint64_t value = addr & ((~((1ull << 12) - 1)) & (((1ull) << 52) - 1)) | 1;
-  processor::wrmsr(0x202, value);
-  value = (~(sz - 1) & ((1ull << 46) - 1))| (1ull << 11);
-  processor::wrmsr(0x203, value);
-  processor::write_cr3(processor::read_cr3());
+    sched::preempt_disable();
+    // 1. Save current CR0 and CR4
+    uint64_t cr0 = processor::read_cr0();
+    uint64_t cr4 = processor::read_cr4();
 
-  value = processor::rdmsr(0x2ff);
-  value |= (1ull << 11);
-  processor::wrmsr(0x2ff, value);
-}
+    // 2. Disable cache: set CD=1, clear NW=0 in CR0
+    processor::write_cr0((cr0 & ~(1ull << 29)) | (1ull << 30));
+    asm volatile("wbinvd" ::: "memory");
+
+
+    // 4. Flush TLBs — if PGE is set, clear it to force a global TLB flush;
+    //    otherwise a CR3 reload is sufficient.
+    if (cr4 & (1ull << 7)) {
+        processor::write_cr4(cr4 & ~(1ull << 7));
+    } else {
+        processor::write_cr3(processor::read_cr3());
+    }
+
+    // 5. Disable MTRRs via IA32_MTRR_DEF_TYPE (MSR 0x2FF): clear E (bit 11)
+    uint64_t def_type = processor::rdmsr(0x2ff);
+    processor::wrmsr(0x2ff, def_type & ~(1ull << 11));
+
+    // 6. Program the variable MTRR pair.
+    //    PHYSBASE: bits [51:12] = physical base, bits [7:0] = memory type (1 = WC)
+    //    PHYSMASK: bits [51:12] = mask, bit 11 = Valid
+    constexpr uint64_t PHYS_ADDR_MASK = ((1ull << 52) - 1) & ~((1ull << 12) - 1);
+
+    uint64_t base = (addr & PHYS_ADDR_MASK) | 0x1 /* WC */;
+    uint64_t mask = (~(sz - 1) & PHYS_ADDR_MASK) | (1ull << 11) /* Valid */;
+
+    processor::wrmsr(0x200, base);   // IA32_MTRR_PHYSBASE0 — adjust index as needed
+    processor::wrmsr(0x201, mask);   // IA32_MTRR_PHYSMASK0
+
+    // (Your original code used 0x202/0x203, which is PHYSBASE1/PHYSMASK1 — keep
+    // whichever pair you actually own. Don't stomp a pair the firmware is using.)
+
+    // 7. Re-enable MTRRs (set E, bit 11). Also ensure FE (bit 10) reflects
+    //    whatever fixed-range policy you want; preserve it from the read.
+    processor::wrmsr(0x2ff, (def_type & ~0xffull) | (1ull << 11) | (def_type & (1ull << 10))); 
+
+    // 9. Flush TLBs again
+    processor::write_cr3(processor::read_cr3());
+
+    // 10. Restore CR4 (re-enables PGE if it was set)
+    if (cr4 & (1ull << 7)) {
+        processor::write_cr4(cr4);
+    }
+
+    // 11. Restore CR0 (re-enables caching)
+    processor::write_cr0(cr0);
+    sched::preempt_enable();
+
+ }
 
 static uint32_t
 ena_calc_max_io_queue_num(struct ena_com_dev *ena_dev,
@@ -2425,7 +2468,7 @@ int ena_attach(pci::device *dev, ena_adapter **_adapter) {
 
   /* Assign default devargs values */
   adapter->missing_tx_completion_to = ENA_TX_TIMEOUT;
-  adapter->llq_header_policy = ENA_LLQ_POLICY_DISABLED;
+  adapter->llq_header_policy = ENA_LLQ_POLICY_NORMAL;
 
   rc = ena_com_allocate_customer_metrics_buffer(ena_dev);
   if (rc != 0) {

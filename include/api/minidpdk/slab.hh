@@ -160,7 +160,7 @@ inline void mbuf_free(mbuf *buf);
 
 using init_fn_t = void (*)(mbuf **, uint16_t, void *);
 struct slab_cache {
-  static constexpr size_t kDefaultCacheSize = 128;
+  static constexpr size_t kDefaultCacheSize = 256;
   struct slab_list {
     slab head, tail;
     slab_list() : head(), tail() {
@@ -182,9 +182,9 @@ struct slab_cache {
 
   slab_list partial;
   slab_list full;
-  std::array<obj_header *, kDefaultCacheSize> mag;
-  unsigned top = 0;
   size_t obj_size;
+  unsigned top = 0;
+  std::array<obj_header *, kDefaultCacheSize> mag;
 
   slab_cache(size_t obj_size) : partial(), full(), obj_size(obj_size) {}
 };
@@ -202,7 +202,12 @@ public:
   static constexpr size_t kSlabSize = 2 * 1024 * 1024;
 
 public:
-  slab_allocator(unsigned size, void* priv = nullptr, init_fn_t init_fn = nullptr) : cache(kDefaultSize), priv(priv), init_fn(init_fn) { alloc_new_slab(cache); }
+  slab_allocator(unsigned size, void* priv = nullptr, init_fn_t init_fn = nullptr) : cache(kDefaultSize), priv(priv), init_fn(init_fn) { 
+      auto per_page = kSlabSize - sizeof(slab);
+      per_page /= kDefaultSize;
+      for(unsigned i = 0; i < size; i += per_page)
+          alloc_new_slab(cache); 
+  }
 
   mbuf *alloc_default(uint16_t data_len) {
     assert(data_len <= kMaxDataLen);

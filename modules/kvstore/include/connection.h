@@ -29,7 +29,6 @@ struct statistics {
 };
 
 class connection_manager {
-  static constexpr uint16_t kdefaultBurstSize = 64;
   friend connection;
 
 public:
@@ -88,6 +87,15 @@ public:
   connection *open_connection(uint16_t sport, uint16_t dport,
                               const uint32_t sip, const uint32_t dip,
                               const uint16_t target);
+
+  
+  void link_ready(connection& con){
+      if(is_client)
+          return;
+      if(!con.ready.is_linked())
+        ready.push_back(con);
+  }
+
 
   void poll_client() {
     fetch_from_qpair();

@@ -184,6 +184,7 @@ class slab_allocator {
   static constexpr unsigned kDefaultPrefill = 4;
   static constexpr unsigned kLargePrefill = 1;
   static constexpr unsigned kPageCacheSize = 8;
+
 public:
   static constexpr size_t kDefaultHeadroom = 64;
   static constexpr size_t kMaxDataRoom = 1500 + 20;
@@ -199,17 +200,16 @@ public:
   static_assert(kDefaultJumboSize % 8 == 0, "");
 
 public:
-  slab_allocator(
-                 unsigned default_prefill_thres = kDefaultPrefill,
+  slab_allocator(unsigned default_prefill_thres = kDefaultPrefill,
                  unsigned large_prefill_thres = kLargePrefill)
-      : caches{slab_cache(kDefaultSize), slab_cache(kDefaultJumboSize)}{
+      : caches{slab_cache(kDefaultSize), slab_cache(kDefaultJumboSize)} {
     for (unsigned i = 0; i < default_prefill_thres; ++i)
       alloc_new_slab(caches[0]);
     for (unsigned i = 0; i < large_prefill_thres; ++i)
       alloc_new_slab(caches[1]);
   }
 
-  template <unsigned cl, size_t mbuf_size, size_t hdroom, bool iova>
+  template <unsigned cl, size_t mbuf_size, size_t hdroom>
   mbuf *alloc(uint16_t data_len) {
     auto &cache = caches[cl];
     obj_header *obj = nullptr;
@@ -217,7 +217,7 @@ public:
       obj = cache.local_cache[--cache.top];
     } else {
       if (cache.free_list.empty())
-        alloc_new_slab<iova>(cache);
+        alloc_new_slab(cache);
       auto *s = cache.free_list.front();
       obj = s->freelist;
       assert(obj);
@@ -234,27 +234,25 @@ public:
 
   mbuf *alloc_default(uint16_t data_len) {
     assert(data_len <= kMaxDataLen);
-    return alloc<0, kMaxDataRoom, kDefaultHeadroom, false>(data_len);
+    return alloc<0, kMaxDataRoom, kDefaultHeadroom>(data_len);
   }
 
   mbuf *alloc_large() {
-    return alloc<1, kMaxJumboDataLen, kJumboHeadroom, true>(kMaxJumboDataLen);
+    return alloc<1, kMaxJumboDataLen, kJumboHeadroom>(kMaxJumboDataLen);
   }
 
   static uintptr_t virt_to_phys(void *vaddr) {
     return mmu::virt_to_phys(vaddr);
-  }   
+  }
 
-  template <bool iova = false> void alloc_new_slab(slab_cache &c) {
+  void alloc_new_slab(slab_cache &c) {
     if (pcache.top == 0)
       fill_cache();
     auto *region = pcache.pages[--pcache.top];
     auto *s = new (region) slab();
-    if constexpr (iova) {
-      // prefault, MAP_POPULATE may fail
-      s->iova = virt_to_phys(region);
-      assert(s->iova != RTE_BAD_IOVA);
-    }
+    // prefault, MAP_POPULATE may fail
+    s->iova = virt_to_phys(region);
+    assert(s->iova != RTE_BAD_IOVA);
 
     size_t off = c.color;
     auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab);
@@ -336,14 +334,15 @@ public:
 private:
   void fill_cache() {
     auto *pre = static_cast<uint8_t *>(
-        mmap(nullptr, kSlabSize * (kPageCacheSize - pcache.top), PROT_READ | PROT_WRITE,
+        mmap(nullptr, kSlabSize * (kPageCacheSize - pcache.top),
+             PROT_READ | PROT_WRITE,
              MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0));
     assert(pre != MAP_FAILED);
     for (unsigned i = pcache.top; i < kPageCacheSize; ++i) {
       pcache.pages[pcache.top++] = pre;
       pre += kSlabSize;
-      assert((reinterpret_cast<uintptr_t>(pcache.pages[pcache.top - 1]) & (kSlabSize - 1)) ==
-             0);
+      assert((reinterpret_cast<uintptr_t>(pcache.pages[pcache.top - 1]) &
+              (kSlabSize - 1)) == 0);
     }
   }
   std::array<slab_cache, kSizeClassCnt> caches;

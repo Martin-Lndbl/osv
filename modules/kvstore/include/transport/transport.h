@@ -32,7 +32,7 @@ class connection_manager;
 template <typename P = packet_if, typename M = connection_manager>
 class transport {
   friend M;
-
+  static constexpr unsigned kBurstSize = 32;
 public:
   struct {
     uint64_t sent = 0;
@@ -326,15 +326,22 @@ public:
   ssize_t send_sgl(sgl &msgl) {
     if (connection_state::ESTABLISHED != cstate)
       return 0;
+    unsigned burst = 0;
     ssize_t sent = 0;
-    for (; !msgl.empty();) {
-      auto retval = send_single_seg(msgl);
+    ssize_t retval = 0;
+    for (; !msgl.empty() && burst < kBurstSize;) {
+      retval = send_single_seg(msgl);
       if (retval < 0) {
         sent = sent == 0 ? retval : sent;
-        break;
+        goto done;
       }
+      ++burst;
       sent += retval;
     }
+
+    if(burst == kBurstSize && !msgl.empty())
+        manager->link_ready(*this);
+done: 
     FASTT_LOG_DEBUG("send len=%lu total=%zd\n", msgl.size, sent);
     return sent;
   }

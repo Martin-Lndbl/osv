@@ -6,13 +6,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
-#include <string>
 #include <minidpdk/mem.hh>
 #include <minidpdk/dev.hh>
 
 class qpair {
 public:
-    static constexpr uint16_t kDefaultInputBurstSize = 64;
+    static constexpr uint16_t kDefaultInputBurstSize = 256;
   qpair(uint16_t port, uint16_t txq, uint16_t rxq)
       : port(port), txq(txq), rxq(rxq),
         tx_buffer(static_cast<rte_eth_dev_tx_buffer *>(

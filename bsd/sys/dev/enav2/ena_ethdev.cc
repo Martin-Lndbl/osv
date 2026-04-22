@@ -1326,64 +1326,28 @@ static int ena_set_queues_placement_policy(
   return 0;
 }
 
-void ena_eth_dev::setup_memory(){
-      auto *adapter = get<ena_adapter>();
-    auto addr = adapter->dev_mem->get_addr64();
-    auto sz = adapter->dev_mem->get_size();
+void ena_eth_dev::setup_memory() {
+  auto *adapter = get<ena_adapter>();
+  auto addr = adapter->dev_mem->get_addr64();
+  auto sz = adapter->dev_mem->get_size();
 
-    sched::preempt_disable();
-    // 1. Save current CR0 and CR4
-    uint64_t cr0 = processor::read_cr0();
-    uint64_t cr4 = processor::read_cr4();
+  sched::preempt_disable();
+  auto *adapter = get<ena_adapter>();
+  auto addr = adapter->dev_mem->get_addr64();
+  auto sz = adapter->dev_mem->get_size();
+  processor::write_cr3(processor::read_cr3());
 
-    // 2. Disable cache: set CD=1, clear NW=0 in CR0
-    processor::write_cr0((cr0 & ~(1ull << 29)) | (1ull << 30));
-    asm volatile("wbinvd" ::: "memory");
+  uint64_t value = addr & ((~((1ull << 12) - 1)) & (((1ull) << 52) - 1)) | 1;
+  processor::wrmsr(0x202, value);
+  value = (~(sz - 1) & ((1ull << 46) - 1)) | (1ull << 11);
+  processor::wrmsr(0x203, value);
+  processor::write_cr3(processor::read_cr3());
 
-
-    // 4. Flush TLBs — if PGE is set, clear it to force a global TLB flush;
-    //    otherwise a CR3 reload is sufficient.
-    if (cr4 & (1ull << 7)) {
-        processor::write_cr4(cr4 & ~(1ull << 7));
-    } else {
-        processor::write_cr3(processor::read_cr3());
-    }
-
-    // 5. Disable MTRRs via IA32_MTRR_DEF_TYPE (MSR 0x2FF): clear E (bit 11)
-    uint64_t def_type = processor::rdmsr(0x2ff);
-    processor::wrmsr(0x2ff, def_type & ~(1ull << 11));
-
-    // 6. Program the variable MTRR pair.
-    //    PHYSBASE: bits [51:12] = physical base, bits [7:0] = memory type (1 = WC)
-    //    PHYSMASK: bits [51:12] = mask, bit 11 = Valid
-    constexpr uint64_t PHYS_ADDR_MASK = ((1ull << 52) - 1) & ~((1ull << 12) - 1);
-
-    uint64_t base = (addr & PHYS_ADDR_MASK) | 0x1 /* WC */;
-    uint64_t mask = (~(sz - 1) & PHYS_ADDR_MASK) | (1ull << 11) /* Valid */;
-
-    processor::wrmsr(0x200, base);   // IA32_MTRR_PHYSBASE0 — adjust index as needed
-    processor::wrmsr(0x201, mask);   // IA32_MTRR_PHYSMASK0
-
-    // (Your original code used 0x202/0x203, which is PHYSBASE1/PHYSMASK1 — keep
-    // whichever pair you actually own. Don't stomp a pair the firmware is using.)
-
-    // 7. Re-enable MTRRs (set E, bit 11). Also ensure FE (bit 10) reflects
-    //    whatever fixed-range policy you want; preserve it from the read.
-    processor::wrmsr(0x2ff, (def_type & ~0xffull) | (1ull << 11) | (def_type & (1ull << 10))); 
-
-    // 9. Flush TLBs again
-    processor::write_cr3(processor::read_cr3());
-
-    // 10. Restore CR4 (re-enables PGE if it was set)
-    if (cr4 & (1ull << 7)) {
-        processor::write_cr4(cr4);
-    }
-
-    // 11. Restore CR0 (re-enables caching)
-    processor::write_cr0(cr0);
-    sched::preempt_enable();
-
- }
+  value = processor::rdmsr(0x2ff);
+  value |= (1ull << 11);
+  processor::wrmsr(0x2ff, value);
+  sched::preempt_enable();
+}
 
 static uint32_t
 ena_calc_max_io_queue_num(struct ena_com_dev *ena_dev,
@@ -1594,7 +1558,7 @@ static int ena_infos_get(rte_eth_dev *dev, rte_eth_dev_info *dev_info) {
  * ********************************************************************/
 
 static inline void ena_init_rx_mbuf(rte_mbuf *mbuf, uint16_t len) {
-  mbuf->refcnt = 1;  
+  mbuf->refcnt = 1;
   mbuf->data_len = len;
   mbuf->next = NULL;
 }
@@ -1865,7 +1829,8 @@ static int ena_tx_cleanup(void *txp, uint32_t free_pkt_cnt) {
     struct ena_tx_buffer *tx_info;
     uint16_t req_id;
 
-    if (ena_com_tx_comp_metadata_get(tx_ring->ena_com_io_cq, &req_id, &hw_timestamp) != 0)
+    if (ena_com_tx_comp_metadata_get(tx_ring->ena_com_io_cq, &req_id,
+                                     &hw_timestamp) != 0)
       break;
 
     if (unlikely(validate_tx_req_id(tx_ring, req_id) != 0))
@@ -2193,8 +2158,8 @@ int ena_eth_dev::rx_queue_setup(uint16_t qid, uint16_t nb_desc,
 TRACEPOINT(trace_ena_eth_dev_tx_burst, "qid=%x, tx_pkts=%y, nb_pkts=%z",
            uint16_t, rte_mbuf **, uint16_t);
 TRACEPOINT(trace_ena_eth_dev_tx_burst_ret, "");
-uint16_t tx_burst(rte_eth_dev* dev, uint16_t qid, rte_mbuf **tx_pkts,
-                               uint16_t nb_pkts) {
+uint16_t tx_burst(rte_eth_dev *dev, uint16_t qid, rte_mbuf **tx_pkts,
+                  uint16_t nb_pkts) {
   trace_ena_eth_dev_tx_burst(qid, tx_pkts, nb_pkts);
   if (qid >= dev->data.nb_tx_queues)
     return 0;
@@ -2239,8 +2204,8 @@ uint16_t tx_burst(rte_eth_dev* dev, uint16_t qid, rte_mbuf **tx_pkts,
 TRACEPOINT(trace_ena_eth_dev_rx_burst, "qid=%x, rx_pkts=%y, nb_pkts=%z",
            uint16_t, rte_mbuf **, uint16_t);
 TRACEPOINT(trace_ena_eth_dev_rx_burst_ret, "");
-uint16_t rx_burst(rte_eth_dev* dev, uint16_t qid, rte_mbuf **rx_pkts,
-                               uint16_t nb_pkts) {
+uint16_t rx_burst(rte_eth_dev *dev, uint16_t qid, rte_mbuf **rx_pkts,
+                  uint16_t nb_pkts) {
   trace_ena_eth_dev_rx_burst(qid, rx_pkts, nb_pkts);
   if (qid >= dev->data.nb_rx_queues)
     return 0;
@@ -2458,8 +2423,8 @@ int ena_attach(pci::device *dev, ena_adapter **_adapter) {
   adapter->regs->map();
   ena_dev->reg_bar =
       static_cast<u8 *>(const_cast<void *>(adapter->regs->get_mmio()));
-  /* Pass device data as rx_free_thresha pointer which can be passed to the IO functions
-   * by the ena_com (for example - the memory allocation).
+  /* Pass device data as rx_free_thresha pointer which can be passed to the IO
+   * functions by the ena_com (for example - the memory allocation).
    */
   ena_dev->dmadev = &edev->data;
   adapter->id_number = adapters_found;

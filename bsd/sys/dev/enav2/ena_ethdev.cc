@@ -1332,9 +1332,6 @@ void ena_eth_dev::setup_memory() {
   auto sz = adapter->dev_mem->get_size();
 
   sched::preempt_disable();
-  auto *adapter = get<ena_adapter>();
-  auto addr = adapter->dev_mem->get_addr64();
-  auto sz = adapter->dev_mem->get_size();
   processor::write_cr3(processor::read_cr3());
 
   uint64_t value = addr & ((~((1ull << 12) - 1)) & (((1ull) << 52) - 1)) | 1;

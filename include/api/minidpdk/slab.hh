@@ -227,7 +227,7 @@ public:
       }
     }
     assert(obj);
-    return new (obj) mbuf{nullptr, this,     obj->iova,       kDefaultSize,
+    return new (obj) mbuf{nullptr, this,     obj->iova,       kMaxDataLen,
                           1,       data_len, kDefaultHeadroom};
   }
 
@@ -239,7 +239,7 @@ public:
           for(auto i = 0u; i < from_cache; ++i){
               auto *obj = reinterpret_cast<obj_header*>(pkts[i]);
               rte_prefetch0_write(pkts + 3);
-              new (obj) mbuf{nullptr, this,     obj->iova,       kDefaultSize,
+              new (obj) mbuf{nullptr, this,     obj->iova,       kMaxDataLen,
                           1,       0, kDefaultHeadroom};
           }
       }
@@ -307,7 +307,7 @@ public:
     }
   }
 
-  constexpr size_t get_data_size() const { return kDefaultSize; }
+  constexpr size_t get_data_size() const { return kMaxDataLen; }
 
   mbuf_ptr alloc_default_safe(uint16_t data_len) {
     auto *pkt = alloc_default(data_len);

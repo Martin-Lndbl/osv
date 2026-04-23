@@ -1332,7 +1332,8 @@ void ena_eth_dev::setup_memory() {
   auto sz = adapter->dev_mem->get_size();
   assert(processor::rdmsr(0x2ff) & (1ull << 11));
 
-  auto addr_len = processor::cpuid(0x80000008);
+  auto cpuid = processor::cpuid(0x80000008);
+  auto addr_len = cpuid.a;
   addr_len = addr_len  & ((1ull <<8) - 1);
 
   sched::preempt_disable();

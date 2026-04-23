@@ -403,6 +403,7 @@ static int ena_com_init_io_sq(struct ena_com_dev *ena_dev,
 		if (io_sq->llq_info.max_entries_in_tx_burst > 0)
 			io_sq->entries_in_tx_burst_left =
 				io_sq->llq_info.max_entries_in_tx_burst;
+    printf("%u\n", io_sq->llq_info.max_entries_in_tx_burst);
 	}
 
 	io_sq->tail = 0;

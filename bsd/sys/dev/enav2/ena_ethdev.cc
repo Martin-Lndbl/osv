@@ -210,7 +210,7 @@ static const struct ena_stats ena_stats_rx_strings[] = {
 /* Device supports setting RSS hash. */
 #define ENA_RX_RSS_HASH 0x0040
 
-int ena_log_level = ENA_DBG;
+int ena_log_level = ENA_WARN;
 
 static ena_vendor_info_t ena_vendor_info_array[] = {
     {PCI_VENDOR_ID_AMAZON, PCI_DEVICE_ID_ENA_VF, 0},
@@ -1338,7 +1338,7 @@ void ena_eth_dev::setup_memory() {
 
   sched::preempt_disable();
   uint64_t cr4 = processor::read_cr4();
-  uint64_t cr0 = processor::read_cr4();
+  uint64_t cr0 = processor::read_cr0();
   processor::write_cr0(cr0 & ~(1ull << 30));
   __asm__ __volatile__("wbinvd" ::: "memory");
   processor::write_cr3(processor::read_cr3());

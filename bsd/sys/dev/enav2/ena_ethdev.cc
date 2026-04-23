@@ -1330,19 +1330,30 @@ void ena_eth_dev::setup_memory() {
   auto *adapter = get<ena_adapter>();
   auto addr = adapter->dev_mem->get_addr64();
   auto sz = adapter->dev_mem->get_size();
+  assert(processor::rdmsr(0x2ff) & (1ull << 11));
+
+  auto addr_len = processor::cpuid(0x80000008);
+  addr_len = addr_len  & ((1ull <<8) - 1);
 
   sched::preempt_disable();
+  uint64_t cr4 = processor::read_cr4();
+  uint64_t cr0 = processor::read_cr4();
+  processor::write_cr0(cr0 & ~(1ull << 30));
+  __asm__ __volatile__("wbinvd" ::: "memory");
   processor::write_cr3(processor::read_cr3());
+  uint64_t mtrr_msr = processor::rdmsr(0x2ff);
+  processor::wrmsr(0x2ff, mtrr_msr & ~(1ull << 11));
 
-  uint64_t value = addr & ((~((1ull << 12) - 1)) & (((1ull) << 52) - 1)) | 1;
+  uint64_t value = (addr & ((~((1ull << 12) - 1)) & (((1ull) << 52) - 1))) | 1;
   processor::wrmsr(0x202, value);
-  value = (~(sz - 1) & ((1ull << 46) - 1)) | (1ull << 11);
+  value = (~(sz - 1) & ((1ull << addr_len) - 1)) | (1ull << 11);
   processor::wrmsr(0x203, value);
   processor::write_cr3(processor::read_cr3());
 
-  value = processor::rdmsr(0x2ff);
-  value |= (1ull << 11);
-  processor::wrmsr(0x2ff, value);
+  mtrr_msr = processor::rdmsr(0x2ff);
+  processor::wrmsr(0x2ff, mtrr_msr | (1ull << 11));
+  processor::write_cr0(cr0);
+  processor::write_cr4(cr4);
   sched::preempt_enable();
 }
 

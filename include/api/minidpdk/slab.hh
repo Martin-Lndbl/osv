@@ -61,6 +61,176 @@ struct alignas(64) mbuf {
   struct {
     uint64_t rss;
   } hash;
+  // type of the packet
+  uint32_t packet_type;
+
+  mbuf() = default;
+  mbuf(mbuf *next, mem_pool *sb, uintptr_t iova, uint32_t size,
+       uint16_t nb_segs, uint16_t data_len, uint16_t headroom)
+      : next(next), buf_addr(reinterpret_cast<char *>(this) + sizeof(mbuf)),
+        pool(sb), iova(iova + sizeof(mbuf) + headroom), data_offset(headroom),
+        pkt_len(), data_len(data_len), buf_len(size), refcnt(1),
+        nb_segs(nb_segs), ol_flags(), shinfo(nullptr) {}
+
+  uint8_t *buf_start() { return reinterpret_cast<uint8_t *>(buf_addr); }
+
+  template <typename T> T *data(size_t offset = 0) {
+    return reinterpret_cast<T *>(buf_start() + data_offset + offset);
+  }
+
+  const void *read(uint32_t off, uint32_t len, void *buf) {
+    if (off + len <= data_len)
+      return data<uint8_t *>(off);
+
+    auto *seg = this;
+    while (seg && off >= seg->data_len) {
+      off -= seg->data_len;
+      seg = seg->next;
+    }
+
+    uint32_t copied = 0;
+    while (seg && copied < len) {
+      auto *src = seg->data<uint8_t>() + off;
+      auto n = std::min<uint32_t>(seg->data_len - off, len - copied);
+      std::memcpy(static_cast<uint8_t *>(buf) + copied, src, n);
+      copied += n;
+      off = 0;
+      seg = seg->next;
+    }
+
+    return copied == len ? buf : nullptr;
+  }
+
+  mbuf *last_seg() {
+    auto *seg = this;
+    while (seg->next)
+      seg = seg->next;
+    return seg;
+  }
+
+  template <typename T> T *prepend() {
+    data_offset -= sizeof(T);
+    data_len += sizeof(T);
+    iova -= sizeof(T);
+    return data<T>();
+  }
+
+  void adj(uint16_t len) {
+    data_offset += len;
+    data_len -= len;
+    iova += len;
+  }
+};
+
+struct alignas(64) obj_header {
+  obj_header *next;
+  uintptr_t iova;
+};
+
+inline void mbuf_free(mbuf *buf);
+
+struct alignas(64) page_header {
+  page_header *next;
+  page_header *prev;
+  uintptr_t iova;
+
+  static void list_remove(page_header *s) {
+    s->prev->next = s->next;
+    s->next->prev = s->prev;
+  }
+
+  page_header() : next(nullptr), prev(nullptr) {}
+};
+
+static_assert(sizeof(page_header) % 64 == 0, "");
+
+inline void mbuf_free(mbuf *buf);
+
+using init_fn_t = void (*)(mbuf **, uint16_t, void *);
+struct page_storage {
+  static constexpr size_t kDefaultCacheSize = 256;
+  struct page_list {
+    page_header head, tail;
+    page_list() : head(), tail() {
+      head.next = &tail;
+      tail.prev = &head;
+    }
+
+    void list_push(page_header *s) {
+      s->next = head.next;
+      s->prev = &head;
+      head.next->prev = s;
+      head.next = s;
+    }
+
+    bool empty() const { return head.next == &tail; }
+
+    page_header *front() { return head.next; }
+  };
+
+  page_list regions;
+  page_storage() : regions() {}
+};
+
+inline void mbuf_free(mbuf *buf);
+
+using mbuf_ptr = std::unique_ptr<mbuf, decltype(&mbuf_free)>;
+
+class mem_pool {
+public:
+  static constexpr size_t kDefaultHeadroom = 128;
+  static constexpr size_t kMaxDataLen = 1500 + 36;
+  static constexpr size_t kDefaultSize =
+      kMaxDataLen + kDefaultHeadroom + sizeof(mbuf) + sizeof(obj_header);
+  static_assert(kDefaultSize % 64  == 0, "");
+  static constexpr size_t kSlabSize = 2 * 1024 * 1024;
+
+public:
+  mem_pool(unsigned size, void *priv = nullptr, init_fn_t init_fn = nullptr)
+      : ps(), objs(size), obj_size(kDefaultSize),  priv(priv), init_fn(init_fn){      
+    while (top < objs.size())
+      alloc_new_region();
+  }
+
+  mbuf *alloc_default() {
+    if (top == 0)
+      return nullptr;
+    auto *obj = objs[--top];
+    return reinterpret_cast<mbuf *>(obj + 1);
+  }
+
+  uintptr_t get_iova(void * ptr){
+      auto *ph = reinterpret_cast<page_header*>(reinterpret_cast<uintptr_t>(ptr) & ~(kSlabSize - 1));
+      auto *ptr_byte = static_cast<uint8_t*>(ptr);
+      auto *ph_byte = reinterpret_cast<uint8_t*>(ph);
+      return ph->iova + (ptr_byte - ph_byte);
+  }
+
+  int alloc_bulk(void **pkts, unsigned n) {
+    if (top < n)
+      return -1;
+    for (auto i = 0u; i < n; ++i) {
+      auto *obj = objs[--top];
+      rte_prefetch0_write(&objs[top - 4]);
+      pkts[i] = reinterpret_cast<mbuf *>(obj + 1);
+    }
+    return 0;
+  }
+
+  mbuf *alloc_single() { return alloc_default(); }
+
+  void alloc_new_region() {
+    auto *region = memory::alloc_huge_page(mmu::huge_page_size);
+    assert(region != nullptr);
+    auto *s = new (region) page_header();
+    auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(page_header);
+    s->iova = mmu::virt_to_phys(s);
+    size_t space = kSlabSize - sizeof(page_header);
+    ps.regions.list_push(s);
+
+    size_t off = 0;
+    while (top < objs.size() && off + obj_size <= space) {
+      auto *obj = new (base + off) obj_header;
 
   // NIC offload flags
   uint64_t ol_flags;
@@ -242,7 +412,7 @@ public:
       auto * m = new (obj + 1) mbuf(nullptr, this,
                          obj->iova + sizeof(obj_header), kMaxDataLen, 1, 0,
                          kDefaultHeadroom);
-      assert(m->iova == get_iova(m));
+      assert(m->iova + sizeof(mbuf) + sizeof(obj_header) + kDefaultHeadroom == get_iova(m));
       objs[top++] = obj;
       off += obj_size;
     }
@@ -251,10 +421,10 @@ public:
   __inline void free_single_mbuf(mbuf *obj) {
     auto *obj_hdr = reinterpret_cast<obj_header *>(
         reinterpret_cast<uint8_t *>(obj) - sizeof(obj_header));
-    new (obj) mbuf(nullptr, this,
+    auto *m = new (obj) mbuf(nullptr, this,
                    obj_hdr->iova + sizeof(obj_header), kMaxDataLen, 1, 0,
                    kDefaultHeadroom);
-    assert(obj->iova == get_iova(obj));
+    assert(m->iova + sizeof(mbuf) + sizeof(obj_header) + kDefaultHeadroom == get_iova(obj));
     objs[top++] = obj_hdr;
   }
 

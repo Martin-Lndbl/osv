@@ -191,15 +191,15 @@ public:
 
 public:
   mem_pool(unsigned size, void *priv = nullptr, init_fn_t init_fn = nullptr)
-      : ps(), objs(size), obj_size(kDefaultSize),  priv(priv), init_fn(init_fn){      
-    while (top < objs.size())
+      : ps(), objs(size), obj_size(kDefaultSize), top(size), priv(priv), init_fn(init_fn){
+    while (top > 0)
       alloc_new_region();
   }
 
   mbuf *alloc_default() {
-    if (top == 0)
+    if (top == objs.size())
       return nullptr;
-    auto *obj = objs[--top];
+    auto *obj = objs[top++];
     return reinterpret_cast<mbuf *>(obj + 1);
   }
 
@@ -211,11 +211,11 @@ public:
   }
 
   int alloc_bulk(void **pkts, unsigned n) {
-    if (top < n)
+    if (objs.size() - top < n)
       return -1;
     for (auto i = 0u; i < n; ++i) {
-      auto *obj = objs[--top];
-      rte_prefetch0_write(&objs[top - 4]);
+      auto *obj = objs[top++];
+      rte_prefetch0_write(&objs[top + 4]);
       pkts[i] = reinterpret_cast<mbuf *>(obj + 1);
     }
     return 0;
@@ -233,7 +233,7 @@ public:
     ps.regions.list_push(s);
 
     size_t off = 0;
-    while (top < objs.size() && off + obj_size <= space) {
+    while (top > 0 && off + obj_size <= space) {
       auto *obj = new (base + off) obj_header;
       obj->next = nullptr;
       obj->iova = s->iova + sizeof(page_header) + off;
@@ -241,7 +241,7 @@ public:
                          obj->iova + sizeof(obj_header), kMaxDataLen, 1, 0,
                          kDefaultHeadroom);
       assert(m->iova == get_iova(m) + sizeof(mbuf) + kDefaultHeadroom);
-      objs[top++] = obj;
+      objs[--top] = obj;
       off += obj_size;
     }
   }
@@ -253,7 +253,7 @@ public:
                    obj_hdr->iova + sizeof(obj_header), kMaxDataLen, 1, 0,
                    kDefaultHeadroom);
       assert(obj->iova == get_iova(obj) + sizeof(mbuf) + kDefaultHeadroom);
-    objs[top++] = obj_hdr;
+    objs[--top] = obj_hdr;
   }
 
   void free_mbuf(mbuf *obj) {

@@ -228,8 +228,6 @@ static void init(minidpdk::mbuf **pkts, uint16_t n, void* priv){
 }
 
 int run(netconfig &conf) {
-  bench::prepare(store, len);
-
   if (fastt::init())
     return -1;
 
@@ -253,6 +251,8 @@ int run(netconfig &conf) {
       iface::configure_port(0, nthreads, nthreads, allocators, lcore_ids);
   if (!ifc)
     return -1;
+  bench::prepare(store, len, store_size);
+  printf("Setup complete\n");
 
   std::vector<lcore_server_adapter> adapters(nthreads);
   i = 0;

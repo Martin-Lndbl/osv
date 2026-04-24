@@ -47,16 +47,16 @@ const void* rte_pktmbuf_read(rte_mbuf *m, uint32_t off,
 rte_mempool *rte_pktmbuf_pool_create(const char *name, unsigned n,
                                      unsigned cache_size, uint16_t priv_size,
                                      uint16_t data_room_size, int socket_id){
-    assert(data_room_size <= minidpdk::slab_allocator::kMaxDataLen);
+    assert(data_room_size <= minidpdk::mem_pool::kMaxDataLen);
     (void)cache_size;
     (void)priv_size;
     (void)socket_id;
     (void)data_room_size;
-    auto *slab = malloc(sizeof(minidpdk::slab_allocator));
-    return new(slab) minidpdk::slab_allocator(n);
+    auto *slab = malloc(sizeof(minidpdk::mem_pool));
+    return new(slab) minidpdk::mem_pool(n);
 }
 void rte_mempool_free(rte_mempool *pool){
-    pool->~slab_allocator();
+    pool->~mem_pool();
     free(pool);
 }
 

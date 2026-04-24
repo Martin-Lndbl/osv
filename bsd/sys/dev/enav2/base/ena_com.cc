@@ -771,6 +771,7 @@ static int ena_com_config_llq_info(struct ena_com_dev *ena_dev,
 		!!(llq_accel_mode_get.supported_flags &
 		   BIT(ENA_ADMIN_DISABLE_META_CACHING));
 
+  printf("%lx\n", llq_accel_mode_get.supported_flags);
 	if (llq_accel_mode_get.supported_flags & BIT(ENA_ADMIN_LIMIT_TX_BURST))
 		llq_info->max_entries_in_tx_burst =
 			llq_accel_mode_get.max_tx_burst_size /

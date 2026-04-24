@@ -153,7 +153,7 @@ template <typename T, T alignment> static constexpr T align(T val) {
 #define rte_free free
 
 using rte_mbuf = minidpdk::mbuf;
-using rte_pktmbuf_pool = minidpdk::slab_allocator;
+using rte_pktmbuf_pool = minidpdk::mem_pool;
 using rte_mempool = rte_pktmbuf_pool;
 using rte_mbuf_ext_shared_info = minidpdk::rte_mbuf_ext_shared_info;
 

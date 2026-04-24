@@ -42,19 +42,6 @@ public:
   }
 
 private:
-  static void unsent_cb(rte_mbuf** pkts, uint16_t unsent, void* userdata){
-      static constexpr uint16_t kRetryTOus = 10;
-      auto* qp = static_cast<qpair*>(userdata);
-      auto now = rte_get_timer_cycles();
-      auto end = now + get_ticks_us() * kRetryTOus;
-      auto sent = 0u;
-      do{
-          sent += rte_eth_tx_burst(qp->port, qp->txq, pkts + sent, unsent - sent);
-      }while(sent < unsent && rte_get_timer_cycles() < end);
-      if(unsent - sent)
-          rte_pktmbuf_free_bulk(pkts + sent, unsent - sent);
-  }
-
   uint16_t port;
   uint16_t txq;
   uint16_t rxq;

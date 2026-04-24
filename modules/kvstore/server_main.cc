@@ -171,8 +171,6 @@ int lcore_server_fun(void *arg) {
 }
 #else
 int lcore_server_fun(void *arg) {
-    
-  __rte_setup_memory(0);
   auto myid = rte_lcore_index(rte_lcore_id());
   auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
   auto *server = adapters[myid].iface.get();

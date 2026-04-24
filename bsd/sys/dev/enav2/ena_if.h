@@ -24,6 +24,5 @@ public:
     int drv_configure() override;
     int get_dev_info(rte_eth_dev_info *info) override; 
     int rss_reta_update(rte_eth_rss_reta_entry64* reta, uint16_t reta_size) override;
-    void setup_memory() override;
 };
 #endif // !ENA_IF_H_

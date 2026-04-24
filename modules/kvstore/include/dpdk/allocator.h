@@ -7,7 +7,7 @@ struct dpdk_allocator {
   using backend_data = minidpdk::rte_mbuf_ext_shared_info;  
   static std::shared_ptr<dpdk_allocator> create(const char *name, unsigned n, void* priv = nullptr, minidpdk::init_fn_t init_fn = nullptr) {
     auto *pool = rte_pktmbuf_pool_create(
-        name, n, 0, 0, minidpdk::slab_allocator::kMaxDataLen, SOCKET_ID_ANY);
+        name, n, 0, 0, minidpdk::mem_pool::kMaxDataLen, SOCKET_ID_ANY);
     pool->priv = priv;
     pool->init_fn = init_fn;
     assert(pool);

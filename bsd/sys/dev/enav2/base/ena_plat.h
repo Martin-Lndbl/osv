@@ -152,9 +152,10 @@ extern int ena_log_level;
 
 #define ena_log_raw(level, fmt, args...)                                       \
   do {                                                                         \
-    if (ENA_##level <= ena_log_level)                                          \
+    if (ENA_##level <= ena_log_level) {                                        \
       printf(fmt, ##args);                                                     \
-    printf("\n");                                                              \
+      printf("\n");                                                            \
+    }                                                                          \
   } while (0)
 #else
 #define ena_log(dev, level, fmt, args...)                                      \

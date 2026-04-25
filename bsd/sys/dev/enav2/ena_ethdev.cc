@@ -2410,7 +2410,7 @@ int ena_attach(pci::device *dev, ena_adapter **_adapter) {
 
   /* Assign default devargs values */
   adapter->missing_tx_completion_to = ENA_TX_TIMEOUT;
-  adapter->llq_header_policy = ENA_LLQ_POLICY_NORMAL;
+  adapter->llq_header_policy = ENA_LLQ_POLICY_DISABLED;
 
   rc = ena_com_allocate_customer_metrics_buffer(ena_dev);
   if (rc != 0) {

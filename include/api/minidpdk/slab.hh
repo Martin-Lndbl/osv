@@ -177,7 +177,6 @@ struct page_storage {
 };
 
 inline void mbuf_free(mbuf *buf);
-
 using mbuf_ptr = std::unique_ptr<mbuf, decltype(&mbuf_free)>;
 
 class mem_pool {
@@ -231,7 +230,6 @@ public:
     s->iova = mmu::virt_to_phys(s);
     size_t space = kSlabSize - sizeof(page_header);
     ps.regions.list_push(s);
-
     size_t off = 0;
     while (top > 0 && off + obj_size <= space) {
       auto *obj = new (base + off) obj_header;

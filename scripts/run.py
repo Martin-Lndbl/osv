@@ -47,11 +47,14 @@ def find_qemu_tap_guest_ip_address(qemu_tap_ip_address):
 
 def set_imgargs(options):
     execute = options.execute
-    if options.image and not execute:
+    if options.image and not execute and not options.kernel:
         return
     if not execute:
-        with open("build/%s/cmdline" % (options.opt_path), "r") as cmdline:
-            execute = cmdline.read()
+        if options.kernel:
+            execute = ""
+        else:
+            with open("build/%s/cmdline" % (options.opt_path), "r") as cmdline:
+                execute = cmdline.read()
     if options.verbose:
         execute = "--verbose " + execute
 
@@ -94,7 +97,7 @@ def set_imgargs(options):
     if options.kernel or options.hypervisor == 'qemu_microvm' or options.arch == 'aarch64':
         return
 
-    cmdline = [os.path.join(osv_base, "scripts/imgedit.py"), "setargs", options.image_file, execute]
+    cmdline = [os.path.join(osv_base, "scripts/imgedit.py"), "setargs", "-f raw " + options.image_file, execute]
     if options.dry_run:
         print(format_args(cmdline))
     else:
@@ -116,11 +119,11 @@ def is_direct_io_supported(path):
 def start_osv_qemu(options):
 
     if not is_direct_io_supported(options.image_file):
-        aio = 'cache=unsafe,aio=threads'
+        aio = 'format=raw,cache=unsafe,aio=threads'
     elif options.block_device_cache != None:
-        aio = 'cache=%s,aio=threads'% options.block_device_cache
+        aio = 'format=raw,cache=%s,aio=threads'% options.block_device_cache
     else:
-        aio = 'cache=none,aio=native'
+        aio = 'format=raw,cache=none,aio=native'
 
     args = [
         "-m", options.memsize,
@@ -176,7 +179,7 @@ def start_osv_qemu(options):
         "-drive", "file=%s,if=none,id=nvm,%s" % (options.image_file, aio)]
     elif options.ide:
         args += [
-        "-hda", options.image_file]
+        "-drive", "file=%s,format=raw,if=ide" % options.image_file]
     else:
         args += [
         "-device", "virtio-blk-pci,id=blk0,drive=hd0%s%s" % (boot_index, options.virtio_device_suffix),
@@ -206,8 +209,9 @@ def start_osv_qemu(options):
         "-device", "nvme,serial=deadbeef,drive=nvm1,"]
 
     if options.pass_pci:
-        args += [
-        "-device", "vfio-pci,host=%s" % (options.pass_pci)]
+        devices = options.pass_pci.split(",")
+        for d in devices:
+            args += ["-device", "vfio-pci,host=%s" % (d)]
 
     if options.no_shutdown:
         args += ["-no-reboot", "-no-shutdown"]
@@ -651,7 +655,7 @@ if __name__ == "__main__":
     parser.add_argument("--second-nvme-image", action="store",
                         help="Path to an optional disk image that should be attached to the instance as NVMe device")
     parser.add_argument("--pass-pci", action="store",
-                        help="passthrough a pci device in given slot if bound to vfio driver")
+                        help="passthrough pci devices in given slots if bound to vfio driver (can be a list separated by comas)")
     parser.add_argument("--gic-version", action="store", default="max",
                         help="specify GIC version (only applicable on aarch64)")
     cmdargs = parser.parse_args()

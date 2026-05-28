@@ -329,14 +329,6 @@ class osv(gdb.Command):
         gdb.Command.__init__(self, 'osv',
                              gdb.COMMAND_USER, gdb.COMPLETE_COMMAND, True)
 
-class osv_heap(gdb.Command):
-    def __init__(self):
-        gdb.Command.__init__(self, 'osv heap',
-                             gdb.COMMAND_USER, gdb.COMPLETE_NONE)
-    def invoke(self, arg, from_tty):
-        for page_range in free_page_ranges():
-            print('%s 0x%016x' % (page_range, page_range['size']))
-
 class osv_memory(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'osv memory',
@@ -708,6 +700,7 @@ class osv_syms(gdb.Command):
             base = to_int(obj['_base'])
             obj_path = obj['_pathname']['_M_dataplus']['_M_p'].string()
             path = translate(obj_path)
+            print(path)
             if not path:
                 print('ERROR: Unable to locate object file for:', obj_path, hex(base))
             else:
@@ -1242,6 +1235,8 @@ def setup_libstdcxx():
     # But because OSv is statically linked, we miss that auto-loading, so we
     #  need to look for, and run, this script explicitly.
     gcc_python_dirs = glob('/usr/share/gcc-*/python')
+    if len(gcc_python_dirs) == 0:
+        gcc_python_dirs = os.environ.get("GOMP_DIR")
     if len(gcc_python_dirs) == 0: #If the above does not work try different place
         gcc_python_dirs = glob('/usr/share/gcc/python')
     if len(gcc_python_dirs) == 0:
@@ -1727,7 +1722,7 @@ class osv_linear_mmap(gdb.Command):
                       (vaddr, paddr, size, memattr, name))
 
 osv()
-osv_heap()
+#osv_heap()
 osv_memory()
 osv_waiters()
 osv_mmap()

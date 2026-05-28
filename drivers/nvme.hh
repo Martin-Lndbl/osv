@@ -29,7 +29,7 @@
 #define NVME_ADMIN_QUEUE_SIZE 8
 
 //Will be lower if the device doesnt support the specified queue size
-#define NVME_IO_QUEUE_SIZE 64
+#define NVME_IO_QUEUE_SIZE 4096
 
 namespace nvme {
 
@@ -49,7 +49,18 @@ public:
 
     virtual void dump_config();
 
+    void switch_to_interrupt_mode();
+    void switch_to_poll_mode();
+    
+    // interrupt-based
     int make_request(struct bio* bio, u32 nsid = 1);
+
+    // poll-based
+    int make_async_request(struct bio* bio, u32 nsid = 1);
+    void poll_req(struct bio* bio, u32 nsid = 1);
+    void poll_req_on_queue(struct bio* bio, int cpu_id);
+    bool poll_mode;
+
     static hw_driver* probe(hw_device* dev);
 
     std::map<u32, nvme_ns_t*> _ns_data;

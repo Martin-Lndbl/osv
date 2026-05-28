@@ -96,6 +96,11 @@ enum {
     pte_cow = 0,
 };
 
+const int invlpg_max_pages = 1024;
+/* invlpg tlb for the current processor */
+void invlpg_tlb_local();
+/* invlpg tlb for all */
+void invlpg_tlb_all(std::vector<void*>*);
 /* flush tlb for the current processor */
 void flush_tlb_local();
 /* flush tlb for all */
@@ -177,6 +182,7 @@ pt_element<N> make_empty_pte() { return pt_element<N>(); }
 
 /* get the root of the page table responsible for virtual address virt */
 pt_element<4> *get_root_pt(uintptr_t virt);
+pt_element<0>* get_root_ptr();
 
 /* take an error code coming from the exception frame, and return
    whether the error reports a page fault (insn/write) */
@@ -253,6 +259,14 @@ private:
     using hw_ptep_base<N>::p;
     using hw_ptep_base<N>::x;
 };
+
+constexpr unsigned long superblock_bits = 30;
+// Size of one superblock. Must evenly divide superblock_area_base
+constexpr unsigned long superblock_size = 1ul << superblock_bits;
+// Start address of superblocks
+constexpr unsigned long superblock_area_base = 0x200000000000ul;
+// Number of superblocks
+constexpr unsigned long superblock_len = (main_mem_area_base - superblock_area_base) / superblock_size;
 
 }
 

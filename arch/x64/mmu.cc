@@ -16,6 +16,7 @@
 #include <osv/elf.hh>
 #include "exceptions.hh"
 #include <algorithm>
+#include <osv/percpu.hh>
 
 void page_fault(exception_frame *ef)
 {
@@ -48,6 +49,98 @@ namespace mmu {
 
 uint8_t phys_bits = max_phys_bits, virt_bits = 52;
 
+void invlpg_tlb_entry(void* addr){
+	asm volatile("invlpg (%0)" :: "r" (addr) : "memory");
+}
+
+std::atomic_flag tlb_mutex = ATOMIC_FLAG_INIT;
+//mutex tlb_mutex;
+//sched::thread_handle tlb_waiter;
+std::atomic<int> tlb_pendingconfirms;
+std::vector<void*>* pages = NULL;
+    
+static void takeTLBLock(){
+    while(tlb_mutex.test_and_set(std::memory_order_acquire)){}
+    //std::lock_guard<mutex> guard(tlb_mutex);
+    //tlb_waiter.reset(*sched::thread::current());
+}
+
+static void waitTLB(){
+    while(tlb_pendingconfirms.load() > 0){
+        _mm_pause();
+    }
+    tlb_mutex.clear(std::memory_order_release);
+    /*sched::thread::wait_until([] {
+            return tlb_pendingconfirms.load() == 0;
+    });
+    tlb_waiter.clear();*/
+}
+
+static void ackTLB(){
+    tlb_pendingconfirms.fetch_sub(1);
+    /*if(tlb_pendingconfirms.fetch_sub(1) == 1){
+			tlb_waiter.wake_from_kernel_or_with_irq_disabled();
+		}*/
+}
+
+void invlpg_tlb_local(){
+  assert(pages != NULL);
+	for(size_t i=0; i<pages->size(); i++){
+		if(pages->at(i)!=NULL)
+			invlpg_tlb_entry(pages->at(i));
+    }
+}
+
+inter_processor_interrupt tlb_invlpg_ipi{IPI_TLB_INVLPG, []{
+	  invlpg_tlb_local();
+    ackTLB();
+	}
+};
+
+void invlpg_tlb_all(std::vector<void*>* addresses){
+    assert(addresses->size() <= invlpg_max_pages);
+    if (sched::cpus.size() <= 1) {
+        pages = addresses; 
+		    invlpg_tlb_local();
+		    return;
+    }
+    
+    static std::vector<sched::cpu*> ipis(sched::max_cpus);
+
+    SCOPE_LOCK(migration_lock);
+    takeTLBLock();
+    int count;
+    pages = addresses;
+    
+    if (sched::thread::current()->is_app()) {
+        ipis.clear();
+        std::copy_if(sched::cpus.begin(), sched::cpus.end(), std::back_inserter(ipis),
+                [](sched::cpu* c) {
+            if (c == sched::cpu::current()) {
+                return false;
+            }
+
+            if (!c->app_thread.load(std::memory_order_seq_cst)) {
+                return false;
+            }
+            return true;
+        });
+        count = ipis.size();
+    } else {
+        count = sched::cpus.size() - 1;
+    }
+    tlb_pendingconfirms.store(count);
+    if (count == (int)sched::cpus.size() - 1) {
+        tlb_invlpg_ipi.send_allbutself();
+    } else {
+        for (auto&& c: ipis) {
+            tlb_invlpg_ipi.send(c);
+        }
+    }
+    invlpg_tlb_local();
+    waitTLB();
+}
+
 void flush_tlb_local() {
     // TODO: we can use page_table_root instead of read_cr3(), can be faster
     // when shadow page tables are used.
@@ -58,15 +151,10 @@ void flush_tlb_local() {
 // processors confirm flushing their TLB. This is slow, but necessary for
 // correctness so that, for example, after mprotect() returns, no thread on
 // no cpu can write to the protected page.
-mutex tlb_flush_mutex;
-sched::thread_handle tlb_flush_waiter;
-std::atomic<int> tlb_flush_pendingconfirms;
 
 inter_processor_interrupt tlb_flush_ipi{IPI_TLB_FLUSH, [] {
-        mmu::flush_tlb_local();
-        if (tlb_flush_pendingconfirms.fetch_add(-1) == 1) {
-            tlb_flush_waiter.wake_from_kernel_or_with_irq_disabled();
-        }
+    mmu::flush_tlb_local();
+    ackTLB();
 }};
 
 void flush_tlb_all()
@@ -80,8 +168,7 @@ void flush_tlb_all()
 
     SCOPE_LOCK(migration_lock);
     mmu::flush_tlb_local();
-    std::lock_guard<mutex> guard(tlb_flush_mutex);
-    tlb_flush_waiter.reset(*sched::thread::current());
+    takeTLBLock();
     int count;
     if (sched::thread::current()->is_app()) {
         ipis.clear();
@@ -104,7 +191,7 @@ void flush_tlb_all()
     } else {
         count = sched::cpus.size() - 1;
     }
-    tlb_flush_pendingconfirms.store(count);
+    tlb_pendingconfirms.store(count);
     if (count == (int)sched::cpus.size() - 1) {
         tlb_flush_ipi.send_allbutself();
     } else {
@@ -112,16 +199,16 @@ void flush_tlb_all()
             tlb_flush_ipi.send(c);
         }
     }
-    sched::thread::wait_until([] {
-            return tlb_flush_pendingconfirms.load() == 0;
-    });
-    tlb_flush_waiter.clear();
+    waitTLB();
 }
 
 static pt_element<4> page_table_root __attribute__((init_priority((int)init_prio::pt_root)));
 
 pt_element<4> *get_root_pt(uintptr_t virt __attribute__((unused))) {
     return &page_table_root;
+}
+pt_element<0>* get_root_ptr(){
+    return (pt_element<0>*)&page_table_root;
 }
 
 void switch_to_runtime_page_tables()

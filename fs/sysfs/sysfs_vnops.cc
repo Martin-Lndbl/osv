@@ -34,41 +34,24 @@ static string sysfs_distance()
 using namespace memory;
 static string sysfs_free_page_ranges()
 {
-    stats::page_ranges_stats stats;
-    stats::get_page_ranges_stats(stats);
-
-    std::string output("");
-    if (stats.order[page_ranges_max_order].ranges_num) {
-        output += osv::sprintf("huge %04d %012ld\n", //TODO: Show in GB/MB/KB
-           stats.order[page_ranges_max_order].ranges_num, stats.order[page_ranges_max_order].bytes);
-    }
-
-    for (int order = page_ranges_max_order; order--; ) {
-        if (stats.order[order].ranges_num) {
-            output += osv::sprintf("  %02d %04d %012ld\n",
-               order + 1, stats.order[order].ranges_num, stats.order[order].bytes);
-        }
-    }
-
-    return output;
-}
-
-static string sysfs_memory_pools()
-{
-    stats::pool_stats stats;
-    stats::get_global_l2_stats(stats);
-
-    auto output = osv::sprintf("global l2 (in batches) %02d %02d %02d %02d\n",
-        stats._max, stats._watermark_lo, stats._watermark_hi, stats._nr);
-
-    for (auto cpu : sched::cpus) {
-        stats::pool_stats stats;
-        stats::get_l1_stats(cpu->id, stats);
-        output += osv::sprintf("cpu %d l1 (in pages) %03d %03d %03d %03d\n",
-            cpu->id, stats._max, stats._watermark_lo, stats._watermark_hi, stats._nr);
-    }
-
-    return output;
+    // stats::page_ranges_stats stats;
+    // stats::get_page_ranges_stats(stats);
+    //
+    // std::string output("");
+    // if (stats.order[page_ranges_max_order].ranges_num) {
+    //     output += osv::sprintf("huge %04d %012ld\n", //TODO: Show in GB/MB/KB
+    //        stats.order[page_ranges_max_order].ranges_num, stats.order[page_ranges_max_order].bytes);
+    // }
+    //
+    // for (int order = page_ranges_max_order; order--; ) {
+    //     if (stats.order[order].ranges_num) {
+    //         output += osv::sprintf("  %02d %04d %012ld\n",
+    //            order + 1, stats.order[order].ranges_num, stats.order[order].bytes);
+    //     }
+    // }
+    //
+    // return output;
+    return {};
 }
 
 static int
@@ -98,7 +81,6 @@ sysfs_mount(mount* mp, const char *dev, int flags, const void* data)
 
     auto memory = make_shared<pseudo_dir_node>(inode_count++);
     memory->add("free_page_ranges", inode_count++, sysfs_free_page_ranges);
-    memory->add("pools", inode_count++, sysfs_memory_pools);
     memory->add("linear_maps", inode_count++, mmu::sysfs_linear_maps);
 
     auto osv_extension = make_shared<pseudo_dir_node>(inode_count++);

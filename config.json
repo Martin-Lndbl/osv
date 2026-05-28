@@ -5,6 +5,7 @@
             "path": "${OSV_BASE}/modules/cloud-init/"
         },
     "repositories": [
+        "${OSV_BASE}/benchmarks",
         "${OSV_BASE}/apps",
         "${OSV_BASE}/osv_apps",
         "${OSV_BASE}/modules"

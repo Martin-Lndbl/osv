@@ -53,6 +53,7 @@
 #include <osv/mount.h>
 #include <dirent.h>
 #include <mntent.h>
+#include <osv/application.hh>
 
 #include "drivers/zfs.hh"
 #include "drivers/random.hh"
@@ -63,6 +64,7 @@
 #include <processor.hh>
 #include <dlfcn.h>
 #include <osv/string_utils.hh>
+#include <osv/ucache.hh>
 
 using namespace osv;
 using namespace osv::clock::literals;
@@ -157,7 +159,8 @@ static bool opt_list_tracepoints = false;
 static bool opt_strace = false;
 #endif
 #endif
-static bool opt_mount = true;
+static bool opt_mount = false;
+static bool opt_nvme_ext = false;
 static bool opt_pivot = true;
 static std::string opt_rootfs;
 static bool opt_random = true;
@@ -185,8 +188,7 @@ static void usage()
 {
     printf(
         "OSv options:\n"
-        "  --help                show help text\n"
-#if CONF_tracepoints
+        "  --help                   show help text\n"
 #if CONF_tracepoints_sampler
         "  --sampler=arg         start stack sampling profiler\n"
 #endif
@@ -196,37 +198,37 @@ static void usage()
 #if CONF_tracepoints_strace
         "  --strace              start a thread to print tracepoints to the console on the fly\n"
 #endif
-#endif
 #if CONF_memory_tracker
-        "  --leak                start leak detector after boot\n"
+        "  --leak                   start leak detector after boot\n"
 #endif
-        "  --nomount             don't mount the root file system\n"
-        "  --nopivot             do not pivot the root from bootfs to the root fs\n"
-        "  --rootfs=arg          root filesystem to use (zfs, rofs, ramfs or virtiofs)\n"
-        "  --assign-net          assign virtio network to the application\n"
-        "  --maxnic=arg          maximum NIC number\n"
-        "  --norandom            don't initialize any random device\n"
-        "  --noshutdown          continue running after main() returns\n"
-        "  --power-off-on-abort  use poweroff instead of halt if it's aborted\n"
-        "  --noinit              don't run commands from /init\n"
-        "  --verbose             be verbose, print debug messages\n"
-        "  --console=arg         select console driver\n"
-        "  --env=arg             set Unix-like environment variable (putenv())\n"
-        "  --cwd=arg             set current working directory\n"
-        "  --bootchart           perform a test boot measuring a time distribution of\n"
-        "                        the various operations\n\n"
+        "  --nomount                don't mount the root file system\n"
+        "  --mount-nvme-ext         mount the ext partition on the nvme device\n"
+        "  --nopivot                do not pivot the root from bootfs to the root fs\n"
+        "  --rootfs=arg             root filesystem to use (zfs, rofs, ramfs or virtiofs)\n"
+        "  --assign-net             assign virtio network to the application\n"
+        "  --maxnic=arg             maximum NIC number\n"
+        "  --norandom               don't initialize any random device\n"
+        "  --noshutdown             continue running after main() returns\n"
+        "  --power-off-on-abort     use poweroff instead of halt if it's aborted\n"
+        "  --noinit                 don't run commands from /init\n"
+        "  --verbose                be verbose, print debug messages\n"
+        "  --console=arg            select console driver\n"
+        "  --env=arg                set Unix-like environment variable (putenv())\n"
+        "  --cwd=arg                set current working directory\n"
+        "  --bootchart              perform a test boot measuring a time distribution of\n"
+        "                           the various operations\n\n"
 #if CONF_networking_stack
-        "  --ip=arg              set static IP on NIC\n"
-        "  --defaultgw=arg       set default gateway address\n"
-        "  --nameserver=arg      set nameserver address\n"
+        "  --ip=arg                 set static IP on NIC\n"
+        "  --defaultgw=arg          set default gateway address\n"
+        "  --nameserver=arg         set nameserver address\n"
 #endif
-        "  --delay=arg (=0)      delay in seconds before boot\n"
-        "  --redirect=arg        redirect stdout and stderr to file\n"
-        "  --disable_rofs_cache  disable ROFS memory cache\n"
-        "  --nopci               disable PCI enumeration\n"
-        "  --extra-zfs-pools     import extra ZFS pools\n"
-        "  --mount-fs=arg        mount extra filesystem, format:<fs_type,url,path>\n"
-        "  --preload-zfs-library preload ZFS library from /usr/lib/fs\n\n");
+        "  --delay=arg (=0)         delay in seconds before boot\n"
+        "  --redirect=arg           redirect stdout and stderr to file\n"
+        "  --disable_rofs_cache     disable ROFS memory cache\n"
+        "  --nopci                  disable PCI enumeration\n"
+        "  --extra-zfs-pools        import extra ZFS pools\n"
+        "  --mount-fs=arg           mount extra filesystem, format:<fs_type,url,path>\n"
+        "  --preload-zfs-library    preload ZFS library from /usr/lib/fs\n\n");
 }
 
 static void handle_parse_error(const std::string &message)
@@ -325,6 +327,7 @@ static void parse_options(int loader_argc, char** loader_argv)
 #endif
 
     opt_mount = !extract_option_flag(options_values, "nomount");
+    opt_nvme_ext = extract_option_flag(options_values, "mount-nvme-ext");
     opt_pivot = !extract_option_flag(options_values, "nopivot");
     opt_random = !extract_option_flag(options_values, "norandom");
     opt_init = !extract_option_flag(options_values, "noinit");
@@ -450,7 +453,7 @@ std::vector<std::vector<std::string> > prepare_commands(char* app_cmdline)
     return commands;
 }
 
-static std::string read_file(std::string fn)
+/*static std::string read_file(std::string fn)
 {
     FILE *fp = fopen(fn.c_str(), "r");
     if (!fp) {
@@ -475,7 +478,7 @@ static void stop_all_remaining_app_threads()
     while(!application::unsafe_stop_and_abandon_other_threads()) {
         usleep(100000);
     }
-}
+}*/
 
 static int load_fs_library(const char* fs_library_path, std::function<int()> on_load_fun = nullptr)
 {
@@ -517,7 +520,20 @@ static int load_zfs_library_and_mount_zfs_root(bool pivot_when_error = false)
     });
 }
 
-
+/*
+static int load_ext_library_and_mount_additional_ext(){
+    bool pivot_when_error = false;
+    return load_fs_library("/usr/lib/fs/libext.so", [pivot_when_error]() {
+        auto error = mount_rootfs("/nvme", "/dev/nvme0", "ext", 0, nullptr, false);
+        if (error) {
+            debug("Could not mount ext filesystem.\n");
+        } else {
+            boot_time.event("additional EXT mounted");
+        }
+        return error;
+    });
+}
+*/
 static int load_ext_library_and_mount_ext_root(bool pivot_when_error = false)
 {
     // Load and initialize EXT filesystem driver implemented in libext.so
@@ -538,8 +554,6 @@ static int load_ext_library_and_mount_ext_root(bool pivot_when_error = false)
 
 void* do_main_thread(void *_main_args)
 {
-    auto app_cmdline = static_cast<char*>(_main_args);
-
     if (!arch_setup_console(opt_console)) {
         abort("Unknown console:%s\n", opt_console.c_str());
     }
@@ -549,7 +563,6 @@ void* do_main_thread(void *_main_args)
     if (opt_random) {
         randomdev::randomdev_init();
     }
-    boot_time.event("drivers loaded");
 
     if (opt_mount) {
         unmount_devfs();
@@ -610,6 +623,11 @@ void* do_main_thread(void *_main_args)
             fprintf(stderr, "Failed to preload ZFS library. Powering off.\n");
             osv::poweroff();
         }
+    }
+    
+    if(opt_nvme_ext){
+        mount_rootfs("/nvme", "/dev/nvme0", "ext", 0, nullptr, false);
+        //load_ext_library_and_mount_additional_ext();
     }
 
 #if CONF_networking_stack
@@ -717,9 +735,24 @@ void* do_main_thread(void *_main_args)
         }
     }
 
+    char* app_cmdline = static_cast<char*>(_main_args);
+    std::vector<char*> app_argv;
+    if (app_cmdline && *app_cmdline != '\0') {
+        char* saveptr;
+        char* tok = strtok_r(app_cmdline, " \t", &saveptr);
+        while (tok) {
+            app_argv.push_back(tok);
+            tok = strtok_r(nullptr, " \t", &saveptr);
+        }
+    }
+    int app_argc = static_cast<int>(app_argv.size());
+    app_argv.push_back(nullptr);
+    app_main(app_argc, app_argv.data());
+
+    /*
     auto commands = prepare_commands(app_cmdline);
 
-    // Run command lines in /init/* before the manual command line
+    // Run command lines in /init/ * before the manual command line
     if (opt_init) {
         std::vector<std::vector<std::string>> init_commands;
         struct dirent **namelist = nullptr;
@@ -790,6 +823,7 @@ void* do_main_thread(void *_main_args)
     }
 
     application::join_all();
+    */
     return nullptr;
 }
 
@@ -831,6 +865,8 @@ void main_cont(int loader_argc, char** loader_argv)
         printf("Too many cpus, can't boot with greater than %u cpus.\n", sched::max_cpus);
         poweroff();
     }
+
+    memory::prefer_linear_mapping(true);
 
 #if CONF_tracepoints
     if (opt_list_tracepoints) {

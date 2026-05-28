@@ -50,6 +50,12 @@ modules/libtools/*.o
 modules/libyaml/usr.manifest
 modules/dl_tests/usr.manifest
 .idea
+.cache
+.clang-format
 compile_commands.json
 downloaded_packages
 .firecracker
+.cache
+modules/java-base/jni/monitor.d
+docker_build
+.clang-format

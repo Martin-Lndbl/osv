@@ -16,6 +16,7 @@
 #include <osv/trace.hh>
 #include <osv/mempool.hh>
 #include <osv/align.hh>
+#include <osv/ucache.hh>
 
 #include "nvme-queue.hh"
 
@@ -129,7 +130,25 @@ void queue_pair::wait_for_completion_queue_entries()
 
 void queue_pair::map_prps(nvme_sq_entry_t* cmd, struct bio* bio, u64 datasize)
 {
-    void* data = (void*)mmu::virt_to_phys(bio->bio_data);
+    u64 addr;
+    if (ucache::uCacheManager != NULL) {
+        ucache::VMA *vma = ucache::uCacheManager->getVMA(bio->bio_data);
+        if (vma != NULL) {
+            // Compute byte offset of bio->bio_data within its VMA page.
+            // For 4 KiB pages vma->pageSize == NVME_PAGESIZE so off == 0.
+            // For 2 MiB huge pages the bio covers one 4 KiB slice of the page.
+            u64 off = (u64)bio->bio_data & (vma->pageSize - 1);
+            ucache::PTE pte = (vma->pageSize == mmu::huge_page_size)
+                              ? ucache::walkHuge(bio->bio_data)
+                              : ucache::walk(bio->bio_data);
+            addr = (pte.phys << 12) + off;
+        } else {
+            addr = (u64)mmu::virt_to_phys(bio->bio_data);
+        }
+    } else {
+        addr = (u64)mmu::virt_to_phys(bio->bio_data);
+    }
+    assert(addr != 0);
     bio->bio_private = nullptr;
 
     // Depending on the datasize, we map PRPs (Physical Region Page) as follows:
@@ -138,7 +157,6 @@ void queue_pair::map_prps(nvme_sq_entry_t* cmd, struct bio* bio, u64 datasize)
     // 2. If data falls within 2 pages then set prp2 to the second 4K-aligned part of data
     // 3. Otherwise, allocate a physically contigous array long enough to hold addresses
     //    of remaining 4K pages of data
-    u64 addr = (u64) data;
     cmd->rw.common.prp1 = addr;
     cmd->rw.common.prp2 = 0;
 
@@ -152,30 +170,39 @@ void queue_pair::map_prps(nvme_sq_entry_t* cmd, struct bio* bio, u64 datasize)
     if (num_of_pages == 2) {
         cmd->rw.common.prp2 = first_page_start + NVME_PAGESIZE; //2nd page start
     } else if (num_of_pages > 2) {
-        // Allocate PRP list as the request is larger than 8K
-        // For now we can only accomodate datasize <= 2MB so single page
-        // should be exactly enough to map up to 512 pages of the request data
-        assert(num_of_pages / 512 == 0);
         u64* prp_list = nullptr;
         _free_prp_lists.pop(prp_list);
-        if (!prp_list) { // No free pre-allocated ones, so allocate new one
+        if (!prp_list) {
             prp_list = (u64*) alloc_page();
             trace_nvme_prp_alloc(_driver_id, _id, prp_list);
         }
 
         assert(prp_list != nullptr);
         cmd->rw.common.prp2 = mmu::virt_to_phys(prp_list);
+        bio->bio_private = prp_list; // updated below if a chain page is needed
 
-        // Save PRP list in bio so it can be de-allocated later
-        bio->bio_private = prp_list;
+        // Fill PRP list with physical addresses of 4K pages starting from
+        // the 2nd page.  When a PRP list page is full (512 entries) and more
+        // entries are needed, NVMe requires the last slot (index 511) to hold
+        // a chain pointer (physical address of the next PRP list page).
+        // bit 0 of bio->bio_private tags whether chaining was used so that
+        // the completion handler can free the chained page.
+        addr = first_page_start + NVME_PAGESIZE; // 2nd 4K page physical addr
+        u64* cur = prp_list;
+        int pos = 0;
 
-        // Fill in the PRP list with address of subsequent 4K pages
-        addr = first_page_start + NVME_PAGESIZE; //2nd page start
-        prp_list[0] = addr;
-
-        for (int i = 1; i < num_of_pages - 1; i++) {
+        for (int i = 0; i < num_of_pages - 1; i++) {
+            if (pos == 511 && i < num_of_pages - 2) {
+                // Last slot in current PRP page: write chain pointer then
+                // continue filling the next PRP page.
+                u64* next = (u64*) alloc_page();
+                cur[511] = mmu::virt_to_phys(next);
+                cur = next;
+                pos = 0;
+                bio->bio_private = (void*)((uintptr_t)prp_list | 1u);
+            }
+            cur[pos++] = addr;
             addr += NVME_PAGESIZE;
-            prp_list[i] = addr;
         }
     }
 }
@@ -318,6 +345,156 @@ int io_queue_pair::make_request(struct bio* bio, u32 nsid = 1)
     return 0;
 }
 
+int io_queue_pair::make_async_request(struct bio* bio, u32 nsid = 1)
+{
+    u64 slba = bio->bio_offset;
+    u32 nlb = bio->bio_bcount; //do the blockshift in nvme_driver
+    ucache::assert_crash(slba != ~0ul);
+
+    SCOPE_LOCK(_lock);
+    if (_sq_full) {
+        poll_cq_locked();
+    }
+    assert((((_sq._tail + 1) % _qsize) != _sq._head));
+    //
+    // We need to check if there is an outstanding command that uses
+    // _sq._tail as command id.
+    // This happens if:
+    // 1. The SQ is full. Then we just have to wait for an open slot (see above)
+    // 2. The Controller already read a SQE but didnt post a CQE yet.
+    //    This means we could post the command but need a different cid. To still
+    //    use the cid as index to find the corresponding bios we use a matrix
+    //    adding columns if we need them
+    u16 cid = _sq._tail;
+    while (_pending_bios[cid_to_row(cid)][cid_to_col(cid)].load()) {
+        trace_nvme_cid_conflict(_driver_id, _id, cid);
+        cid += _qsize;
+        auto level = cid_to_row(cid);
+        assert(level < max_pending_levels);
+        // Allocate next row of _pending_bios if needed
+        if (!_pending_bios[cid_to_row(cid)]) {
+            init_pending_bios(level);
+        }
+    }
+    //Save bio
+    _pending_bios[cid_to_row(cid)][cid_to_col(cid)] = bio;
+
+    switch (bio->bio_cmd) {
+    case BIO_READ:
+        trace_nvme_read_write_cmd_submit(_driver_id, _id, cid, bio, slba, nlb, false);
+        submit_read_write_cmd(cid, nsid, NVME_CMD_READ, slba, nlb, bio);
+        break;
+
+    case BIO_WRITE:
+        trace_nvme_read_write_cmd_submit(_driver_id, _id, cid, bio, slba, nlb, true);
+        submit_read_write_cmd(cid, nsid, NVME_CMD_WRITE, slba, nlb, bio);
+        break;
+
+    case BIO_FLUSH:
+        submit_flush_cmd(cid, nsid);
+        break;
+
+    default:
+        NVME_ERROR("Operation not implemented\n");
+        return ENOTBLK;
+    }
+    return 0;
+}
+
+// Must be called with _lock held.
+void io_queue_pair::poll_cq_locked()
+{
+    nvme_cq_entry_t* cqep = nullptr;
+    while(cqep == nullptr){
+        cqep = get_completion_queue_entry();
+        _mm_pause();
+    }
+    // Read full CQ entry onto stack so we can advance CQ head ASAP
+    // and release the CQ slot
+    nvme_cq_entry_t cqe = *cqep;
+    advance_cq_head();
+    mmio_setl(_cq._doorbell, _cq._head);
+
+    auto old_sq_head = _sq._head.exchange(cqe.sqhd); //update sq_head
+    if (old_sq_head != cqe.sqhd && _sq_full) {
+        _sq_full = false;
+        if (_sq_full_waiter) {
+            trace_nvme_sq_full_wake(_driver_id, _id, _sq._tail, _sq._head);
+            _sq_full_waiter.wake_from_kernel_or_with_irq_disabled();
+        }
+    }
+
+    // Read cid and release it
+    u16 cid = cqe.cid;
+    auto pending_bio = _pending_bios[cid_to_row(cid)][cid_to_col(cid)].exchange(nullptr);
+    if (pending_bio == nullptr) {
+        printf("Warning: poll_cq queue=%d cpu=%d got cqe for cid=%d but pending_bio was already null\n",
+               _id, sched::cpu::current()->id, cid);
+        assert(false);
+        return;
+    }
+
+    // Free PRP list page(s) stored in bio_private.
+    // bit 0 of bio_private = 1 means the first PRP page was chained: its
+    // slot [511] holds the physical address of a second allocated page.
+    if (pending_bio->bio_private != nullptr) {
+        uintptr_t priv = (uintptr_t)pending_bio->bio_private;
+        u64* prp_list = (u64*)(priv & ~(uintptr_t)1);
+        if (priv & 1) {
+            free_page(mmu::phys_cast<char>(prp_list[511]));
+        }
+        if (!_free_prp_lists.push(prp_list)) {
+            free_page(prp_list);
+            trace_nvme_prp_free(_driver_id, _id, prp_list);
+        }
+    }
+
+    // Call biodone
+    if (cqe.sct != 0 || cqe.sc != 0) {
+        trace_nvme_req_done_error(_driver_id, _id, cid, cqe.sct, cqe.sc, pending_bio);
+        pending_bio->bio_flags |= BIO_DONE;
+        pending_bio->bio_flags |= BIO_ERROR;
+        printf("I/O queue: cid=%d, sct=%#x, sc=%#x, bio=%#x, slba=%llu, nlb=%llu\n",
+            cqe.cid, cqe.sct, cqe.sc, pending_bio,
+            pending_bio ? pending_bio->bio_offset>>9 : 0,
+            pending_bio ? pending_bio->bio_bcount>>9 : 0);
+    } else {
+        trace_nvme_req_done_success(_driver_id, _id, cid, pending_bio);
+        pending_bio->bio_flags |= BIO_DONE;
+    }
+}
+
+void io_queue_pair::poll_cq()
+{
+    SCOPE_LOCK(_lock);
+    poll_cq_locked();
+}
+
+// Drain CQEs from this queue until 'bio' has BIO_DONE set.
+// Handles intermediate CQEs (for other bios) correctly — each one gets
+// BIO_DONE set so its submitter's poll_req loop also exits.
+// Does NOT call destroy_bio; bio lifecycle remains with the original submitter.
+void io_queue_pair::drain_until(struct bio* bio)
+{
+    while ((bio->bio_flags & BIO_DONE) == 0 && (bio->bio_flags & BIO_ERROR) == 0) {
+        if (!_lock.try_lock()) {
+            _mm_pause();
+            continue;
+        }
+        // Lock acquired without sleeping.  Re-check BIO_DONE: a foreign CPU
+        // may have processed this bio's CQE while we were spinning above.
+        if ((bio->bio_flags & BIO_DONE) != 0 || (bio->bio_flags & BIO_ERROR) != 0) {
+            _lock.unlock();
+            break;
+        }
+        poll_cq_locked();
+        _lock.unlock();
+    }
+    if (bio->bio_flags & BIO_ERROR) {
+        printf("io error in drain_until queue=%d\n", _id);
+    }
+}
+
 void io_queue_pair::req_done()
 {
     nvme_cq_entry_t* cqep = nullptr;
@@ -346,11 +523,18 @@ void io_queue_pair::req_done()
             auto pending_bio = _pending_bios[cid_to_row(cid)][cid_to_col(cid)].exchange(nullptr);
             assert(pending_bio);
             //
-            // Save for future re-use or free PRP list saved under bio_private if any
+            // Free PRP list page(s) stored in bio_private.
+            // bit 0 of bio_private = 1 means the first PRP page was chained:
+            // its slot [511] holds the physical address of a second page.
             if (pending_bio->bio_private) {
-                if (!_free_prp_lists.push((u64*)pending_bio->bio_private)) {
-                   free_page(pending_bio->bio_private); //_free_prp_lists is full so free the page
-                   trace_nvme_prp_free(_driver_id, _id, pending_bio->bio_private);
+                uintptr_t priv = (uintptr_t)pending_bio->bio_private;
+                u64* prp_list = (u64*)(priv & ~(uintptr_t)1);
+                if (priv & 1) {
+                    free_page(mmu::phys_cast<char>(prp_list[511]));
+                }
+                if (!_free_prp_lists.push(prp_list)) {
+                    free_page(prp_list);
+                    trace_nvme_prp_free(_driver_id, _id, prp_list);
                 }
             }
             // Call biodone

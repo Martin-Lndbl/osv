@@ -83,7 +83,11 @@ __sysconf = sysconf;
    we implement that, lets at least support them as an alias - see
    issue #1299.
 */
+__isoc23_strtol = strtol;
+__isoc23_strtoll = strtoll;
+__isoc23_strtoull = strtoull;
 __isoc23_strtoul = strtoul;
+__isoc23_strtoull = strtoull;
 __isoc23_sscanf = sscanf;
 __isoc23_fscanf = fscanf;
 __isoc23_strtoll = strtoll;

@@ -21,3 +21,6 @@
 [submodule "kbuild"]
 	path = kbuild
 	url = https://github.com/osvunikernel/kbuild-standalone.git
+[submodule "benchmarks"]
+	path = benchmarks
+	url = https://github.com/Meandres/osv_benchmarks.git

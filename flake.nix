@@ -16,7 +16,7 @@
             inherit system;
             overlays = [ (import ./overlays.nix { inherit inputs; }) ];
           };
-          niwa-pkgs = nur-niwa.packages.x86_64-linux;
+          niwa-pkgs = nur-niwa.packages.${system};
         in
         {
           devShell = pkgs.mkShell {
@@ -48,7 +48,7 @@
               qemu_full # hypervisor
               readline # interactive line editing
               unzip
-              zulu8 # Java jdk
+              jdk8_headless # Java jdk
               clang
               osv-ssl
               osv-ssl-hdr

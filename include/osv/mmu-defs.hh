@@ -12,6 +12,7 @@
 #include <atomic>
 #include <osv/rcu.hh>
 #include <osv/virt_to_phys.hh>
+#include <osv/types.h>
 
 struct exception_frame;
 

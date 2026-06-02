@@ -8,7 +8,6 @@
 #ifndef SYNC_STUB_H
 #define SYNC_STUB_H
 
-#include <sys/cdefs.h>
 #include <osv/mutex.h>
 #include <osv/rwlock.h>
 

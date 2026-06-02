@@ -1,10 +1,11 @@
 *~
 build/
+.cache/
 .\#*
 \#*\#
 modules/java-base/*/target
 modules/java-tests/*/target
-
+libssl*
 .gradle
 tags
 TAGS

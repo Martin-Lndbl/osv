@@ -32,13 +32,13 @@ module: $(LUA_MODULES)
 $(LUA_DIR)/lua53:
 	mkdir -p $(LUA_DIR)
 	cd upstream && wget -c "https://sourceforge.net/projects/luabinaries/files/5.3.6/Tools%20Executables/lua-5.3.6_Linux54_64_bin.tar.gz"
-	cd $(LUA_DIR) && tar xf ../lua-5.3.6_Linux54_64_bin.tar.gz
+	cd $(LUA_DIR) && tar --no-same-owner -xf ../lua-5.3.6_Linux54_64_bin.tar.gz
 
 # Download lua shared library and header files from lua binaries
 $(LUA_DIR)/liblua53.so:
 	mkdir -p $(LUA_DIR)
 	cd upstream && wget -c "https://sourceforge.net/projects/luabinaries/files/5.3.6/Linux%20Libraries/lua-5.3.6_Linux54_64_lib.tar.gz"
-	cd $(LUA_DIR) && tar xf ../lua-5.3.6_Linux54_64_lib.tar.gz
+	cd $(LUA_DIR) && tar --no-same-owner -xf ../lua-5.3.6_Linux54_64_lib.tar.gz
 
 # In order for luarocks to use the downloaded version of lua in upstream, we need to create a config file below
 upstream/config.lua:

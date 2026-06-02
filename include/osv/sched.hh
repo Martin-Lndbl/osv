@@ -93,6 +93,11 @@ extern "C" {
     void thread_main_c(thread* t);
 };
 
+extern bool __thread disable_reschedule;
+inline void update_disable_reschedule(bool val){
+    disable_reschedule = val;
+}
+
 namespace bi = boost::intrusive;
 
 const unsigned max_cpus = sizeof(unsigned long) * 8;
@@ -1170,6 +1175,8 @@ inline void ensure_next_stack_page_if_preemptable() {
 
 inline void preempt()
 {
+    if(disable_reschedule)
+        return;
     if (preemptable()) {
 #ifdef __aarch64__
         reschedule_from_interrupt(sched::cpu::current(), false, thyst);

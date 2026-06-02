@@ -9,3 +9,4 @@ osv_hypervisor_name
 osv_processor_features
 osv_run_app
 osv_version
+get_ns

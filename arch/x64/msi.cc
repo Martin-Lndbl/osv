@@ -31,7 +31,7 @@ interrupt_manager::~interrupt_manager()
 }
 
 bool interrupt_manager::setup_entry(unsigned entry_id, msix_vector* msix)
-{
+{ 
     auto vector = msix->get_vector();
     msi_message msix_msg = apic->compose_msix(vector, 0);
 

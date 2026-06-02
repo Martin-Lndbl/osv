@@ -8,7 +8,8 @@
 #ifndef _OSV_TYPES_H_
 #define _OSV_TYPES_H_ 1
 
-#include <stdint.h>
+#include <cstdint>
+#include <cstddef>
 
 typedef uint8_t u8;
 typedef uint16_t u16;

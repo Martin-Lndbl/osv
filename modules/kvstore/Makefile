@@ -1,6 +1,6 @@
 include ../common.gmk
 
-CXXFLAGS=-O3 -g -Wall -std=c++23 -fPIC $(COMMON) -Iinclude/
+CXXFLAGS=-O0 -g -Wall -std=c++23 -fPIC $(COMMON) -Iinclude/
 SRCS=$(wildcard src/*.cc)
 SRCS+=server_main.cc
 OBJS=$(SRCS:.cc=.o)

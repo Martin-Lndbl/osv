@@ -17,7 +17,7 @@ static uint8_t RSS_DEFAULT_KEY[] = {
 static constexpr unsigned RSS_KEY_LEN = 40;
 
 int fastt::init() {
-  FASTT_LOG_DEBUG("init fasst\n");
+  FASTT_LOG_DEBUG("init fastt\n");
   init_timing();
   return 0;
 }

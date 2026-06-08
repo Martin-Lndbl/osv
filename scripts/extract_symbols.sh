@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 #---------------------------------------------------------------------
 # This script extracts exported symbols from a specified shared library

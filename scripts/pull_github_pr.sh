@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Script for pulling a github pull request
 # along with generating a merge commit message.

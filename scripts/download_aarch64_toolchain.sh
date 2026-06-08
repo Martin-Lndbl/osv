@@ -1,4 +1,4 @@
-#!/bin/bash -eu
+#!/usr/bin/env bash
 
 # Copyright (c) 2021, DornerWorks, Ltd.
 # Author: Stewart Hildebrand

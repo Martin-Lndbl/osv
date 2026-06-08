@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 # This script provides a thin layer around PyGithub library
 # to allow easily list releases and list/upload/download artifacts published

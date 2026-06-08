@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 import optparse, os, sys, subprocess
 from manifest_common import add_var, expand, unsymlink, read_manifest, defines

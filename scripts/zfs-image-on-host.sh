@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 argv0=${0##*/}
 usage() {

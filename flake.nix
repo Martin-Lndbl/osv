@@ -112,10 +112,6 @@
             DPDK_DIR = "${pkgs.dpdk}";
           };
 
-          test = pkgs.mkShell {
-            boost_base = "${inputs.nixpkgs-2311.legacyPackages.${system}.pkgsStatic.boost175}";
-          };
-
           minimal = pkgs.mkShell {
             buildInputs = with pkgs; [
               ack # grep tool
@@ -144,7 +140,7 @@
               yaml-cpp
               libz
               libaio # I/O library
-              osv-boost
+              pkgsStatic.boost181
               virtiofsd
               just
               flex
@@ -164,7 +160,7 @@
             GOMP_DIR = pkgs.libgcc.out;
 
             # Required for OSv kernel build
-            boost_base = "${pkgs.osv-boost}";
+            boost_base = "${pkgs.pkgsStatic.boost181}";
 
             # Required for modules/openssl
             OPENSSL_DIR = "${pkgs.osv-ssl}";

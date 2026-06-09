@@ -1,5 +1,5 @@
 osv_dir := justfile_directory()
-ssd_id := "c5:00.0"
+ssd_id := "c7:00.0"
 
 
 build-kernel mode="release" app="benchmarks/example/example.o":

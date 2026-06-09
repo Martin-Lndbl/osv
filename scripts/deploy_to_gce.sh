@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 #This script deploys latest built OSv image to Google cloud as a GCE vm
 #

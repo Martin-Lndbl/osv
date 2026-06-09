@@ -24,3 +24,7 @@
 [submodule "benchmarks"]
 	path = benchmarks
 	url = https://github.com/Meandres/osv_benchmarks.git
+[submodule "osv_apps"]
+  path = osv_apps
+  url = git@github.com:Martin-Lndbl/osv_apps.git
+

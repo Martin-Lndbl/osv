@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 import boto3, argparse, urllib, time, json, subprocess, os.path
 import argparse

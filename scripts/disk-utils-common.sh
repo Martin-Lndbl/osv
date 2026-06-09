@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 connect_image_to_nbd_device() {
 	# Check if we have something connected to nbd0

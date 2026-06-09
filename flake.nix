@@ -34,10 +34,19 @@
           minimal = pkgs.mkShell {
             buildInputs = with pkgs; [
               bash
+              bison
+              cmake
+              flex
               just
+              ncurses
+              niwa-pkgs.driverctl
               python3
               pkgsStatic.boost181
+              qemu_kvm
             ];
+
+            # Required for OSv kernel build
+            boost_base = "${pkgs.pkgsStatic.boost181}";
           };
 
           common = pkgs.mkShell {
@@ -60,7 +69,7 @@
               pax-utils # elf security library
               python3
               p11-kit # PKCS#11 loader
-              qemu_kvm
+              qemu_full
               readline # interactive line editing
               unzip
               osv-ssl

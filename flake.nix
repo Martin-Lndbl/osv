@@ -6,21 +6,29 @@
     nixpkgs.url = "github:nixos/nixpkgs?ref=23.11";
     nixpkgs-2211.url = "github:nixos/nixpkgs?ref=22.11";
     nur-niwa.url = "github:Meandres/nur-niwa";
+    nur-niwa.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-2211, flake-utils, nur-niwa }@inputs:
-    flake-utils.lib.eachDefaultSystem
-      (system:
-        let
-          pkgs = import nixpkgs {
-            inherit system;
-            overlays = [ (import ./overlays.nix { inherit inputs; }) ];
-          };
-          niwa-pkgs = nur-niwa.packages.${system};
-        in
-        {
-          devShell = pkgs.mkShell {
-
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      nur-niwa,
+      ...
+    }@inputs:
+    flake-utils.lib.eachDefaultSystem (
+      system:
+      let
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ (import ./overlays.nix { inherit inputs; }) ];
+        };
+        niwa-pkgs = nur-niwa.packages.${system};
+      in
+      {
+        devShells = {
+          default = pkgs.mkShell {
             nativeBuildInputs = with pkgs; [
               ack # grep tool
               ant # java dev lib
@@ -48,7 +56,7 @@
               qemu_full # hypervisor
               readline # interactive line editing
               unzip
-              jdk8_headless # Java jdk
+              zulu8 # Java jdk
               clang
               osv-ssl
               osv-ssl-hdr
@@ -57,7 +65,7 @@
               krb5.out
               libselinux.out
               libz
-              boost175
+              osv-boost
               unixODBC
               numactl
               python311Packages.numpy
@@ -92,18 +100,85 @@
             LD_LIBRARY_PATH = "${pkgs.readline}/lib";
             LUA_LIB_PATH = "${pkgs.lua53Packages.lua}/lib";
             GOMP_DIR = pkgs.libgcc.out;
-            STATIC_LIBC= pkgs.glibc.static;
+            STATIC_LIBC = pkgs.glibc.static;
             boost_base = "${pkgs.osv-boost}";
-            BOOST_SO_DIR="${pkgs.boost175}/lib";
-            OPENSSL_DIR="${pkgs.osv-ssl}";
-            OPENSSL_HDR="${pkgs.osv-ssl-hdr}/include";
-            KRB5_DIR="${pkgs.krb5.out}";
-            XZ_DIR="${pkgs.xz.out}";
-            LIBZ_DIR="${pkgs.libz}";
-            LIBSELINUX_DIR="${pkgs.libselinux.out}";
-            DPDK_DIR="${pkgs.dpdk}";
+            BOOST_SO_DIR = "${pkgs.osv-boost}/lib";
+            OPENSSL_DIR = "${pkgs.osv-ssl}";
+            OPENSSL_HDR = "${pkgs.osv-ssl-hdr}/include";
+            KRB5_DIR = "${pkgs.krb5.out}";
+            XZ_DIR = "${pkgs.xz.out}";
+            LIBZ_DIR = "${pkgs.libz}";
+            LIBSELINUX_DIR = "${pkgs.libselinux.out}";
+            DPDK_DIR = "${pkgs.dpdk}";
           };
-        }
-      );
-}
 
+          test = pkgs.mkShell {
+            boost_base = "${inputs.nixpkgs-2311.legacyPackages.${system}.pkgsStatic.boost175}";
+          };
+
+          minimal = pkgs.mkShell {
+            buildInputs = with pkgs; [
+              ack # grep tool
+              autoconf
+              automake
+              bash
+              binutils
+              bisoncpp
+              bison
+              clang-tools # language server
+              cmake
+              gdb
+              gnumake
+              gnupatch
+              libedit
+              libtool
+              ncurses
+              pax-utils # elf security library
+              python3
+              p11-kit # PKCS#11 loader
+              qemu_kvm
+              readline # interactive line editing
+              unzip
+              osv-ssl
+              osv-ssl-hdr
+              yaml-cpp
+              libz
+              libaio # I/O library
+              osv-boost
+              virtiofsd
+              just
+              flex
+              ninja
+              tbb
+              snappy
+              zstd
+              zlib
+              bzip2
+              curl
+              glog
+              lz4
+              niwa-pkgs.driverctl
+            ];
+
+            # Required for scripts/loader.py
+            GOMP_DIR = pkgs.libgcc.out;
+
+            # Required for OSv kernel build
+            boost_base = "${pkgs.osv-boost}";
+
+            # Required for modules/openssl
+            OPENSSL_DIR = "${pkgs.osv-ssl}";
+
+            # Required for modules/openssl
+            KRB5_DIR = "${pkgs.krb5.out}";
+
+            # Required for modules/openssl
+            XZ_DIR = "${pkgs.xz.out}";
+
+            # Required for modules/openssl
+            LIBSELINUX_DIR = "${pkgs.libselinux.out}";
+          };
+        };
+      }
+    );
+}

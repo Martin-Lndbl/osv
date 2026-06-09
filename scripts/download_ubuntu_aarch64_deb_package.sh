@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 package_directory="$1"
 package="$2"

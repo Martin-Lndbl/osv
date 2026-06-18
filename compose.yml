@@ -1,0 +1,10 @@
+services:
+  cpp-dev:
+    build: .
+    container_name: osv-compiler
+    volumes:
+      - .:/home/lukas/osv/:Z
+    working_dir: /home/lukas/osv/
+    stdin_open: true
+    tty: true
+

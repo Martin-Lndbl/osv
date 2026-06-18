@@ -176,8 +176,10 @@ def setup_tap_interface(mode, tap_interface_name, tap_ip=None, physical_nic=None
 
 def find_firecracker(dirname, arch):
     firecracker_path = os.path.join(dirname, '../.firecracker/firecracker-%s' % arch)
+    print(os.environ.get('FIRECRACKER_PATH'))
     if os.environ.get('FIRECRACKER_PATH'):
         firecracker_path = os.environ.get('FIRECRACKER_PATH')
+        print(firecracker_path)
 
     # And offer to install if not found
     firecracker_version = 'v0.23.0'

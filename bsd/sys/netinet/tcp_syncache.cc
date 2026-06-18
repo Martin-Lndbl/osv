@@ -201,12 +201,12 @@ static void syncache_free(struct syncache *sc)
 }
 
 syncache_head::syncache_head()
-	: sch_timer(sch_mtx, std::bind(syncache_timer, this, std::placeholders::_1))
+        : sch_timer(sch_mtx, [this](auto& arg) { syncache_timer(this, arg); })
 {
 #ifdef VIMAGE
-	sch_vnet = curvnet;
+        sch_vnet = curvnet;
 #endif
-	TAILQ_INIT(&sch_bucket);
+        TAILQ_INIT(&sch_bucket);
 }
 
 void syncache_init(void)

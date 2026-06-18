@@ -29,6 +29,7 @@
 #define OSV_LIBUTIL_API __attribute__((__visibility__("default")))
 #define OSV_LIBXENSTORE_API __attribute__((__visibility__("default")))
 #define OSV_LD_LINUX_x86_64_API __attribute__((__visibility__("default")))
+#define OSV_BYPASS_API __attribute__((__visibility__("default")))
 
 // This is to expose some symbols in libsolaris.so
 #define OSV_LIB_SOLARIS_API __attribute__((__visibility__("default")))

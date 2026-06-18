@@ -5,7 +5,6 @@
  * BSD license as described in the LICENSE file in the top-level directory.
  */
 
-#include <stdint.h>
 #include <assert.h>
 #include <machine/param.h>
 #include <bsd/porting/netport.h>

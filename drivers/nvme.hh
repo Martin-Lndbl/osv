@@ -22,7 +22,6 @@
 #include <map>
 
 #define NVME_QUEUE_PER_CPU_ENABLED 1
-
 //Volatile Write Cache
 #define NVME_VWC_ENABLED 1
 

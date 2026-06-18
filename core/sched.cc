@@ -4,7 +4,7 @@
  * This work is open source software, licensed under the terms of the
  * BSD license as described in the LICENSE file in the top-level directory.
  */
-
+#include <osv/types.h>
 #include <osv/sched.hh>
 #include <list>
 #include <osv/mutex.h>
@@ -38,6 +38,7 @@ MAKE_SYMBOL(sched::preemptable);
 MAKE_SYMBOL(sched::preempt);
 MAKE_SYMBOL(sched::preempt_disable);
 MAKE_SYMBOL(sched::preempt_enable);
+MAKE_SYMBOL(sched::update_disable_reschedule);
 
 int futex(int *uaddr, int op, int val, const struct timespec *timeout, int *uaddr2, uint32_t val3);
 
@@ -77,6 +78,7 @@ cpu __thread * current_cpu;
 
 unsigned __thread preempt_counter = 1;
 bool __thread need_reschedule = false;
+bool __thread disable_reschedule = false;
 
 elf::tls_data tls;
 
@@ -241,7 +243,6 @@ void cpu::schedule()
 #endif
     }
 }
-
 // In aarch64 port, the reschedule_from_interrupt() needs to be implemented
 // in assembly (please see arch/aarch64/sched.S) to give us better control
 // which registers are used and which ones are saved and restored during
@@ -392,11 +393,11 @@ void cpu::reschedule_from_interrupt(bool called_from_yield,
                 auto& t = *runqueue.begin();
                 auto delta = n->_runtime.time_until(t._runtime.get_local());
                 if (delta > 0) {
-                    preemption_timer.set_with_irq_disabled(now + delta);
+                    preemption_timer.set_with_irq_disabled(now + delta * 8192 * 128);
                 }
             }
         } else {
-            preemption_timer.set_with_irq_disabled(now + preempt_after);
+            preemption_timer.set_with_irq_disabled(now + preempt_after * 8192 * 128);
         }
     }
 

@@ -308,7 +308,7 @@ post-includes-bsd += -isystem bsd/$(arch)
 $(out)/musl/%.o: pre-include-api = -isystem include/api/internal_musl_headers -isystem musl/src/include
 
 ifneq ($(werror),0)
-	CFLAGS_WERROR = -Werror
+	CFLAGS_WERROR =
 endif
 # $(call compiler-flag, -ffoo, option, file)
 #     returns option if file builds with -ffoo, empty otherwise
@@ -708,11 +708,11 @@ bsd += bsd/sys/dev/hyperv/vmbus/hyperv.o
 endif
 ifeq ($(conf_networking_stack),1)
 ifeq ($(conf_drivers_ena),1)
-bsd += bsd/sys/contrib/ena_com/ena_eth_com.o
-bsd += bsd/sys/contrib/ena_com/ena_com.o
-bsd += bsd/sys/dev/ena/ena_datapath.o
-bsd += bsd/sys/dev/ena/ena.o
-$(out)/bsd/sys/dev/ena/%.o: CXXFLAGS += -Ibsd/sys/contrib
+bsd += bsd/sys/dev/enav2/base/ena_eth_com.o
+bsd += bsd/sys/dev/enav2/base/ena_com.o
+bsd += bsd/sys/dev/enav2/ena_ethdev.o
+bsd += bsd/sys/dev/enav2/ena_rss.o
+$(out)/bsd/sys/dev/enav2/%.o: CXXFLAGS += -Ibsd/sys/contrib
 endif
 endif
 endif
@@ -1182,6 +1182,11 @@ objects += core/osv_c_wrappers.o
 endif
 objects += core/options.o
 objects += core/string_utils.o
+objects += core/mem.o
+objects += core/time.o
+objects += core/dev.o
+objects += core/net.o
+
 
 #include $(src)/libc/build.mk:
 libc =
@@ -2149,42 +2154,45 @@ else
 endif
 endif
 
-#Allow user specify non-default location of boost
+# Allow user to specify non-default location of boost
 ifeq ($(boost_base),)
-    # link with -mt if present, else the base version (and hope it is multithreaded)
-    boost-mt := -mt
-    boost-lib-dir := $(dir $(shell $(CC) --print-file-name libboost_system$(boost-mt).a))
-    ifeq ($(filter /%,$(boost-lib-dir)),)
-        boost-mt :=
-        boost-lib-dir := $(dir $(shell $(CC) --print-file-name libboost_system$(boost-mt).a))
-    endif
-    # When boost_env=host, we won't use "-nostdinc", so the build machine's
-    # header files will be used normally. So we don't need to add anything
-    # special for Boost.
+    # Search Nix environments and standard paths first
+    boost-search-dirs := $(patsubst -L%,%,$(filter -L%,$(NIX_LDFLAGS))) /usr/lib /usr/local/lib /usr/lib64
+    boost-lib-file := $(firstword $(foreach dir,$(boost-search-dirs),$(wildcard $(dir)/libboost_system*.a)))
+
     boost-includes =
-    ifeq ($(filter /%,$(boost-lib-dir)),)
-        # If the compiler cannot find the boost library, for aarch64 we look in a
-        # special location before giving up.
+
+    # If the compiler cannot find the boost library, for aarch64 we look in a
+    # special location before giving up.
+    ifeq ($(boost-lib-file),)
         ifeq ($(arch),aarch64)
             aarch64_boostbase = build/downloaded_packages/aarch64/boost/install
             ifeq (,$(wildcard $(aarch64_boostbase)))
                 $(error Missing $(aarch64_boostbase) directory. Please run "./scripts/download_aarch64_packages.py")
             endif
 
-            boost-lib-dir := $(firstword $(dir $(shell find $(aarch64_boostbase)/ -name libboost_system*.a)))
-            boost-mt := $(if $(filter %-mt.a, $(wildcard $(boost-lib-dir)/*.a)),-mt)
+            boost-lib-file := $(firstword $(shell find $(aarch64_boostbase)/ -name "libboost_system*.a"))
             boost-includes = -isystem $(aarch64_boostbase)/usr/include
         else
-            $(error Error: libboost_system.a needs to be installed.)
+            $(error Error: libboost_system*.a needs to be installed.)
         endif
     endif
 else
     # Use boost specified by the user
-    boost-lib-dir := $(firstword $(dir $(shell find $(boost_base)/ -name libboost_system*.a)))
-    boost-mt := $(if $(filter %-mt.a, $(wildcard $(boost-lib-dir)/*.a)),-mt)
+    boost-lib-file := $(firstword $(shell find $(boost_base)/ -name "libboost_system*.a"))
     boost-includes = -isystem $(boost_base)/usr/include
 endif
 
+# Safety check
+ifeq ($(boost-lib-file),)
+    $(error Error: Could not resolve a path to libboost_system*.a)
+endif
+
+boost-lib-dir := $(patsubst %/,%,$(dir $(boost-lib-file)))
+boost-filename := $(notdir $(boost-lib-file))
+boost-mt := $(patsubst libboost_system%.a,%,$(boost-filename))
+
+# Reconstruct the exact path dynamically
 boost-libs := $(boost-lib-dir)/libboost_system$(boost-mt).a
 
 objects += fs/nfs/nfs_null_vfsops.o
@@ -2292,8 +2300,8 @@ endif
 $(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(out)/libvdso-content.o $(loader_options_dep) $(version_script_file) $(APP_LIBS)
 	$(call quiet, $(LD) $(lto_ld_flags) -o $@ $(def_symbols) \
 		-Bdynamic --export-dynamic --eh-frame-hdr --enable-new-dtags -L$(out)/arch/$(arch) \
-            $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(APP_LIBS),$^))) \
-	    $(app_libs_flags) $(linker_archives_options) $(conf_linker_extra_options), \
+		$(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(loader_options_dep) $(APP_LIBS),$^))) \
+		$(app_libs_flags) $(linker_archives_options) $(conf_linker_extra_options), \
 		LINK loader.elf)
 	@# Build libosv.so matching this loader.elf. This is not a separate
 	@# rule because that caused bug #545.

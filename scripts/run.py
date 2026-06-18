@@ -322,6 +322,8 @@ def start_osv_qemu(options):
         qemu_env['OSV_BRIDGE'] = options.bridge
         qemu_path = options.qemu_path or qemu_env.get('QEMU_PATH') or ('qemu-system-%s' % options.arch)
         cmdline = [qemu_path] + args
+        if options.cpuset:
+            cmdline = ["taskset", "-c", options.cpuset] + cmdline
         if options.dry_run:
             print(format_args(cmdline))
         else:
@@ -658,6 +660,8 @@ if __name__ == "__main__":
                         help="passthrough pci devices in given slots if bound to vfio driver (can be a list separated by comas)")
     parser.add_argument("--gic-version", action="store", default="max",
                         help="specify GIC version (only applicable on aarch64)")
+    parser.add_argument("--cpuset", action="store",
+                        help="pin the VM process to the given host CPUs (taskset -c syntax, e.g. '0,2,4-7')")
     cmdargs = parser.parse_args()
 
     cmdargs.opt_path = "debug" if cmdargs.debug else "release" if cmdargs.release else "last"

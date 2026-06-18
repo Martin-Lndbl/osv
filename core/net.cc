@@ -1,0 +1,4 @@
+#include<minidpdk/net.hh>
+
+
+rte_ether_addr rte_ether_addr::broadcast{{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}};
